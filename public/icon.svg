@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1d4ed8" />
+      <stop offset="50%" stop-color="#2563eb" />
+      <stop offset="100%" stop-color="#4338ca" />
+    </linearGradient>
+    <linearGradient id="walletGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="100%" stop-color="#e2e8f0" />
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+    <filter id="dropShadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-opacity="0.3" flood-color="#0f172a" />
+    </filter>
+  </defs>
+
+  <!-- Background with subtle squircle -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)" />
+
+  <!-- App Graphic Container -->
+  <g filter="url(#dropShadow)">
+    <!-- Wallet Base Body -->
+    <rect x="96" y="144" width="320" height="232" rx="36" fill="url(#walletGrad)" />
+    
+    <!-- Wallet Flap / Top accent -->
+    <path d="M 96 190 C 96 164.7 116.7 144 142 144 L 370 144 C 395.3 144 416 164.7 416 190 L 416 216 L 96 216 Z" fill="#cbd5e1" opacity="0.6" />
+
+    <!-- Wallet Clasp / Pocket -->
+    <path d="M 276 220 L 396 220 C 407 220 416 229 416 240 L 416 280 C 416 291 407 300 396 300 L 276 300 C 254 300 254 220 276 220 Z" fill="#0284c7" />
+    <circle cx="304" cy="260" r="14" fill="#fbbf24" />
+    
+    <!-- Growth badge / Coin icon -->
+    <circle cx="216" cy="260" r="44" fill="url(#accentGrad)" />
+    <path d="M 216 234 L 216 286 M 202 244 L 226 244 C 234 244 234 256 226 256 L 206 256 C 198 256 198 268 206 268 L 230 268" 
+          stroke="#ffffff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+  </g>
+</svg>

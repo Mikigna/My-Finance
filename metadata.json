@@ -1,0 +1,10 @@
+{
+  "name": "Мои Финансы",
+  "description": "Приложение для управления личными финансами: учет расходов и доходов, гибкая настройка категорий и способов оплаты, наглядная аналитика и экспорт отчетов в CSV.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
