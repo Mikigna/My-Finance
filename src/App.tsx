@@ -2,15 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { seedInitialData } from './db/database';
 import { ExpensesTab } from './components/ExpensesTab';
 import { BudgetTab } from './components/BudgetTab';
+import { FreedomTab } from './components/FreedomTab';
 import { SettingsTab } from './components/SettingsTab';
 import { ReportsTab } from './components/ReportsTab';
 import { DeployGuideModal } from './components/DeployGuideModal';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { OfflineIndicator } from './components/OfflineIndicator';
-import { Wallet, PieChart, Settings, Rocket, ShieldCheck, PiggyBank } from 'lucide-react';
+import { Wallet, PieChart, Settings, Rocket, ShieldCheck, PiggyBank, Sparkles } from 'lucide-react';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'expenses' | 'budget' | 'reports' | 'settings'>('expenses');
+  const [activeTab, setActiveTab] = useState<'expenses' | 'budget' | 'freedom' | 'reports' | 'settings'>('expenses');
   const [isDeployModalOpen, setIsDeployModalOpen] = useState(false);
   const [isReady, setIsReady] = useState(false);
 
@@ -97,6 +98,18 @@ export default function App() {
             </button>
 
             <button
+              onClick={() => setActiveTab('freedom')}
+              className={`flex-1 py-3 text-sm font-medium flex items-center justify-center gap-1.5 sm:gap-2 border-b-2 transition-all ${
+                activeTab === 'freedom'
+                  ? 'border-white text-white font-bold bg-white/10'
+                  : 'border-transparent text-blue-100 hover:text-white hover:bg-white/5'
+              }`}
+            >
+              <Sparkles className="w-4 h-4 text-amber-300" />
+              <span>Свобода</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('reports')}
               className={`flex-1 py-3 text-sm font-medium flex items-center justify-center gap-1.5 sm:gap-2 border-b-2 transition-all ${
                 activeTab === 'reports'
@@ -127,13 +140,14 @@ export default function App() {
       <main className="flex-1 max-w-4xl w-full mx-auto p-3 sm:p-6 pb-28 sm:pb-20">
         {activeTab === 'expenses' && <ExpensesTab />}
         {activeTab === 'budget' && <BudgetTab />}
+        {activeTab === 'freedom' && <FreedomTab />}
         {activeTab === 'reports' && <ReportsTab />}
         {activeTab === 'settings' && <SettingsTab />}
       </main>
 
       {/* Mobile Native Bottom Navigation Bar (Optimized for iPhone notch/home bar and Android) */}
       <nav className="sm:hidden fixed bottom-0 inset-x-0 z-40 bg-white/95 backdrop-blur-lg border-t border-slate-200/90 shadow-2xl pb-[env(safe-area-inset-bottom,0.5rem)]">
-        <div className="grid grid-cols-4 px-1 py-1">
+        <div className="grid grid-cols-5 px-1 py-1">
           <button
             type="button"
             onClick={() => setActiveTab('expenses')}
@@ -144,7 +158,7 @@ export default function App() {
             }`}
           >
             <Wallet className={`w-5 h-5 mb-0.5 ${activeTab === 'expenses' ? 'stroke-[2.5]' : ''}`} />
-            <span className="text-[11px] leading-tight">Затраты</span>
+            <span className="text-[10px] leading-tight">Затраты</span>
           </button>
 
           <button
@@ -157,7 +171,20 @@ export default function App() {
             }`}
           >
             <PiggyBank className={`w-5 h-5 mb-0.5 ${activeTab === 'budget' ? 'stroke-[2.5]' : ''}`} />
-            <span className="text-[11px] leading-tight">Бюджет</span>
+            <span className="text-[10px] leading-tight">Бюджет</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('freedom')}
+            className={`flex flex-col items-center justify-center py-2 px-1 rounded-xl transition-all ${
+              activeTab === 'freedom'
+                ? 'text-indigo-600 font-bold scale-105'
+                : 'text-slate-400 hover:text-slate-700'
+            }`}
+          >
+            <Sparkles className={`w-5 h-5 mb-0.5 ${activeTab === 'freedom' ? 'stroke-[2.5] text-amber-500' : ''}`} />
+            <span className="text-[10px] leading-tight">Свобода</span>
           </button>
 
           <button
@@ -170,7 +197,7 @@ export default function App() {
             }`}
           >
             <PieChart className={`w-5 h-5 mb-0.5 ${activeTab === 'reports' ? 'stroke-[2.5]' : ''}`} />
-            <span className="text-[11px] leading-tight">Отчеты</span>
+            <span className="text-[10px] leading-tight">Отчеты</span>
           </button>
 
           <button
@@ -183,7 +210,7 @@ export default function App() {
             }`}
           >
             <Settings className={`w-5 h-5 mb-0.5 ${activeTab === 'settings' ? 'stroke-[2.5]' : ''}`} />
-            <span className="text-[11px] leading-tight">Настройки</span>
+            <span className="text-[10px] leading-tight">Настройки</span>
           </button>
         </div>
       </nav>

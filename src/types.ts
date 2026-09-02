@@ -66,3 +66,34 @@ export interface BudgetReallocation {
   reason?: string;
 }
 
+export type IncomeYieldType = 'PERCENT' | 'ABSOLUTE';
+
+export interface PassiveIncomeSource {
+  id?: number;
+  name: string;
+  currency: string; // 'KZT', 'USD', 'EUR', 'RUB', etc.
+  marketValue: number; // in asset's currency
+  incomeType: IncomeYieldType; // 'PERCENT' | 'ABSOLUTE'
+  incomePercent?: number; // annual % if PERCENT
+  incomeAbsolute?: number; // monthly income in asset currency if ABSOLUTE
+  expectedReturn: number; // % for target capital calculation (e.g. 10%)
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface CurrencyRate {
+  id?: number;
+  code: string; // 'USD', 'EUR', 'RUB', 'CNY', etc.
+  name?: string;
+  rate: number; // rate to KZT
+  updatedAt?: string;
+}
+
+export interface FreedomSettings {
+  id?: number;
+  inflation: number; // e.g. 8.5 (%)
+  expensePeriod: number; // 1, 3, 6, 12 months
+  useInflation: boolean;
+  excludeIncomplete: boolean;
+}
+

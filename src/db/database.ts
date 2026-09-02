@@ -1,5 +1,14 @@
 import Dexie, { type Table } from 'dexie';
-import type { Transaction, Category, PaymentMethod, BudgetItem, BudgetReallocation } from '../types';
+import type { 
+  Transaction, 
+  Category, 
+  PaymentMethod, 
+  BudgetItem, 
+  BudgetReallocation,
+  PassiveIncomeSource,
+  CurrencyRate,
+  FreedomSettings
+} from '../types';
 
 /**
  * ========================================================================================
@@ -24,6 +33,9 @@ export interface BackupDataSchema {
   methods: PaymentMethod[];
   budgets: BudgetItem[];
   reallocations: BudgetReallocation[];
+  freedomSources?: PassiveIncomeSource[];
+  freedomCurrencies?: CurrencyRate[];
+  freedomSettings?: FreedomSettings;
 }
 
 export class FinanceDatabase extends Dexie {
@@ -32,6 +44,9 @@ export class FinanceDatabase extends Dexie {
   methods!: Table<PaymentMethod, number>;
   budgets!: Table<BudgetItem, number>;
   reallocations!: Table<BudgetReallocation, number>;
+  freedomSources!: Table<PassiveIncomeSource, number>;
+  freedomCurrencies!: Table<CurrencyRate, number>;
+  freedomSettings!: Table<FreedomSettings, number>;
 
   constructor() {
     super('FinanceDB');
@@ -78,6 +93,18 @@ export class FinanceDatabase extends Dexie {
       methods: '++id, name',
       budgets: '++id, period, category, type, [period+category]',
       reallocations: '++id, period, date'
+    });
+
+    // Версия 5 (Модуль «Финансовая Свобода»)
+    this.version(5).stores({
+      expenses: '++id, amount, category, method, date, type, necessity, frequency, planning, incomeFrequency',
+      categories: '++id, name, type',
+      methods: '++id, name',
+      budgets: '++id, period, category, type, [period+category]',
+      reallocations: '++id, period, date',
+      freedomSources: '++id, name, currency, incomeType',
+      freedomCurrencies: '++id, code',
+      freedomSettings: '++id'
     });
   }
 }
@@ -153,6 +180,28 @@ export async function seedInitialData(): Promise<void> {
           await db.methods.bulkDelete(dupMethodIds);
         }
       }
+
+      // Инициализация валютных курсов по умолчанию
+      const currencyCount = await db.freedomCurrencies.count();
+      if (currencyCount === 0) {
+        await db.freedomCurrencies.bulkAdd([
+          { code: 'USD', name: 'Доллар США ($)', rate: 500, updatedAt: new Date().toISOString() },
+          { code: 'EUR', name: 'Евро (€)', rate: 540, updatedAt: new Date().toISOString() },
+          { code: 'RUB', name: 'Российский рубль (₽)', rate: 5.5, updatedAt: new Date().toISOString() },
+          { code: 'CNY', name: 'Китайский юань (¥)', rate: 70, updatedAt: new Date().toISOString() }
+        ]);
+      }
+
+      // Инициализация настроек модуля «Свобода» по умолчанию
+      const settingsCount = await db.freedomSettings.count();
+      if (settingsCount === 0) {
+        await db.freedomSettings.add({
+          inflation: 8.5,
+          expensePeriod: 3,
+          useInflation: true,
+          excludeIncomplete: true
+        });
+      }
     } finally {
       seedPromise = null;
     }
@@ -166,23 +215,38 @@ export async function seedInitialData(): Promise<void> {
  * Собирает все таблицы локальной IndexedDB и возвращает JSON-строку.
  */
 export async function exportAllDataToJSON(): Promise<string> {
-  const [expenses, categories, methods, budgets, reallocations] = await Promise.all([
+  const [
+    expenses, 
+    categories, 
+    methods, 
+    budgets, 
+    reallocations,
+    freedomSources,
+    freedomCurrencies,
+    freedomSettingsArray
+  ] = await Promise.all([
     db.expenses.toArray(),
     db.categories.toArray(),
     db.methods.toArray(),
     db.budgets.toArray(),
-    db.reallocations.toArray()
+    db.reallocations.toArray(),
+    db.freedomSources.toArray(),
+    db.freedomCurrencies.toArray(),
+    db.freedomSettings.toArray()
   ]);
 
   const backup: BackupDataSchema = {
     app: 'LocalFirstFinance',
-    version: 4,
+    version: 5,
     exportDate: new Date().toISOString(),
     expenses,
     categories,
     methods,
     budgets,
-    reallocations
+    reallocations,
+    freedomSources,
+    freedomCurrencies,
+    freedomSettings: freedomSettingsArray[0]
   };
 
   return JSON.stringify(backup, null, 2);
@@ -218,6 +282,7 @@ export async function importDataFromJSON(jsonString: string): Promise<{
   methodsCount: number;
   budgetsCount: number;
   reallocationsCount: number;
+  freedomSourcesCount: number;
 }> {
   let parsed: any;
   try {
@@ -237,6 +302,9 @@ export async function importDataFromJSON(jsonString: string): Promise<{
   const rawMethods: any[] = Array.isArray(parsed.methods) ? parsed.methods : [];
   const rawBudgets: any[] = Array.isArray(parsed.budgets) ? parsed.budgets : [];
   const rawReallocations: any[] = Array.isArray(parsed.reallocations) ? parsed.reallocations : [];
+  const rawFreedomSources: any[] = Array.isArray(parsed.freedomSources) ? parsed.freedomSources : [];
+  const rawFreedomCurrencies: any[] = Array.isArray(parsed.freedomCurrencies) ? parsed.freedomCurrencies : [];
+  const rawFreedomSettings = parsed.freedomSettings && typeof parsed.freedomSettings === 'object' ? parsed.freedomSettings : null;
 
   // Нормализация и проверка записей транзакций (защита от сломанных полей)
   const cleanExpenses: Transaction[] = rawExpenses.map(item => ({
@@ -312,19 +380,82 @@ export async function importDataFromJSON(jsonString: string): Promise<{
     reason: item.reason ? String(item.reason) : undefined
   }));
 
+  // Нормализация источников пассивного дохода
+  const cleanFreedomSources: PassiveIncomeSource[] = rawFreedomSources.map(item => ({
+    id: typeof item.id === 'number' ? item.id : undefined,
+    name: String(item.name || 'Источник дохода'),
+    currency: String(item.currency || 'KZT').toUpperCase(),
+    marketValue: Number(item.marketValue) || 0,
+    incomeType: item.incomeType === 'ABSOLUTE' ? 'ABSOLUTE' : 'PERCENT',
+    incomePercent: typeof item.incomePercent === 'number' ? item.incomePercent : undefined,
+    incomeAbsolute: typeof item.incomeAbsolute === 'number' ? item.incomeAbsolute : undefined,
+    expectedReturn: Number(item.expectedReturn) || 10,
+    createdAt: item.createdAt ? String(item.createdAt) : undefined,
+    updatedAt: item.updatedAt ? String(item.updatedAt) : undefined
+  }));
+
+  // Нормализация валют
+  const cleanFreedomCurrencies: CurrencyRate[] = rawFreedomCurrencies.map(item => ({
+    id: typeof item.id === 'number' ? item.id : undefined,
+    code: String(item.code || 'USD').toUpperCase(),
+    name: item.name ? String(item.name) : undefined,
+    rate: Number(item.rate) || 1,
+    updatedAt: item.updatedAt ? String(item.updatedAt) : undefined
+  }));
+
   // АТОМАРНАЯ ТРАНЗАКЦИЯ: очищаем и перезаписываем все таблицы за один проход
-  await db.transaction('rw', [db.expenses, db.categories, db.methods, db.budgets, db.reallocations], async () => {
+  await db.transaction('rw', [
+    db.expenses, 
+    db.categories, 
+    db.methods, 
+    db.budgets, 
+    db.reallocations,
+    db.freedomSources,
+    db.freedomCurrencies,
+    db.freedomSettings
+  ], async () => {
     await db.expenses.clear();
     await db.categories.clear();
     await db.methods.clear();
     await db.budgets.clear();
     await db.reallocations.clear();
+    await db.freedomSources.clear();
+    await db.freedomCurrencies.clear();
+    await db.freedomSettings.clear();
 
     if (cleanExpenses.length > 0) await db.expenses.bulkAdd(cleanExpenses);
     if (cleanCategories.length > 0) await db.categories.bulkAdd(cleanCategories);
     if (cleanMethods.length > 0) await db.methods.bulkAdd(cleanMethods);
     if (cleanBudgets.length > 0) await db.budgets.bulkAdd(cleanBudgets);
     if (cleanReallocations.length > 0) await db.reallocations.bulkAdd(cleanReallocations);
+    if (cleanFreedomSources.length > 0) await db.freedomSources.bulkAdd(cleanFreedomSources);
+    
+    if (cleanFreedomCurrencies.length > 0) {
+      await db.freedomCurrencies.bulkAdd(cleanFreedomCurrencies);
+    } else {
+      await db.freedomCurrencies.bulkAdd([
+        { code: 'USD', name: 'Доллар США ($)', rate: 500, updatedAt: new Date().toISOString() },
+        { code: 'EUR', name: 'Евро (€)', rate: 540, updatedAt: new Date().toISOString() },
+        { code: 'RUB', name: 'Российский рубль (₽)', rate: 5.5, updatedAt: new Date().toISOString() },
+        { code: 'CNY', name: 'Китайский юань (¥)', rate: 70, updatedAt: new Date().toISOString() }
+      ]);
+    }
+
+    if (rawFreedomSettings) {
+      await db.freedomSettings.add({
+        inflation: Number(rawFreedomSettings.inflation) || 8.5,
+        expensePeriod: Number(rawFreedomSettings.expensePeriod) || 3,
+        useInflation: rawFreedomSettings.useInflation !== false,
+        excludeIncomplete: rawFreedomSettings.excludeIncomplete !== false
+      });
+    } else {
+      await db.freedomSettings.add({
+        inflation: 8.5,
+        expensePeriod: 3,
+        useInflation: true,
+        excludeIncomplete: true
+      });
+    }
   });
 
   return {
@@ -332,7 +463,8 @@ export async function importDataFromJSON(jsonString: string): Promise<{
     categoriesCount: cleanCategories.length,
     methodsCount: cleanMethods.length,
     budgetsCount: cleanBudgets.length,
-    reallocationsCount: cleanReallocations.length
+    reallocationsCount: cleanReallocations.length,
+    freedomSourcesCount: cleanFreedomSources.length
   };
 }
 
@@ -340,12 +472,24 @@ export async function importDataFromJSON(jsonString: string): Promise<{
  * СБРОС БАЗЫ ДАННЫХ ДО НАЧАЛЬНОГО СОСТОЯНИЯ
  */
 export async function resetDatabaseToDefault(): Promise<void> {
-  await db.transaction('rw', [db.expenses, db.categories, db.methods, db.budgets, db.reallocations], async () => {
+  await db.transaction('rw', [
+    db.expenses, 
+    db.categories, 
+    db.methods, 
+    db.budgets, 
+    db.reallocations,
+    db.freedomSources,
+    db.freedomCurrencies,
+    db.freedomSettings
+  ], async () => {
     await db.expenses.clear();
     await db.categories.clear();
     await db.methods.clear();
     await db.budgets.clear();
     await db.reallocations.clear();
+    await db.freedomSources.clear();
+    await db.freedomCurrencies.clear();
+    await db.freedomSettings.clear();
   });
 
   // Заново наполняем базовыми справочниками
