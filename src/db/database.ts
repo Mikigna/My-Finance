@@ -446,14 +446,20 @@ export async function importDataFromJSON(jsonString: string): Promise<{
         inflation: Number(rawFreedomSettings.inflation) || 8.5,
         expensePeriod: Number(rawFreedomSettings.expensePeriod) || 3,
         useInflation: rawFreedomSettings.useInflation !== false,
-        excludeIncomplete: rawFreedomSettings.excludeIncomplete !== false
+        excludeIncomplete: rawFreedomSettings.excludeIncomplete !== false,
+        expectedPortfolioReturn: Number(rawFreedomSettings.expectedPortfolioReturn) || 10,
+        trinitySWR: Number(rawFreedomSettings.trinitySWR) || 4.0,
+        calculationMethod: rawFreedomSettings.calculationMethod || 'PORTFOLIO_YIELD'
       });
     } else {
       await db.freedomSettings.add({
         inflation: 8.5,
         expensePeriod: 3,
         useInflation: true,
-        excludeIncomplete: true
+        excludeIncomplete: true,
+        expectedPortfolioReturn: 10,
+        trinitySWR: 4.0,
+        calculationMethod: 'PORTFOLIO_YIELD'
       });
     }
   });

@@ -14,19 +14,15 @@ import {
   Edit3, 
   Info, 
   CheckCircle2, 
-  AlertTriangle, 
-  ArrowRight, 
-  RefreshCw, 
   Percent, 
   ShieldCheck, 
   Coins, 
   Layers, 
-  HelpCircle,
-  Clock,
-  ChevronRight,
-  X,
-  Lock,
-  Compass
+  X, 
+  Compass,
+  BookOpen,
+  Award,
+  Check
 } from 'lucide-react';
 
 export function FreedomTab() {
@@ -37,7 +33,10 @@ export function FreedomTab() {
     inflation: 8.5,
     expensePeriod: 3,
     useInflation: true,
-    excludeIncomplete: true
+    excludeIncomplete: true,
+    expectedPortfolioReturn: 10,
+    trinitySWR: 4.0,
+    calculationMethod: 'PORTFOLIO_YIELD'
   });
   const [allExpenses, setAllExpenses] = useState<Transaction[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -66,7 +65,15 @@ export function FreedomTab() {
       setSources(dbSources);
       setCurrencies(dbCurrencies);
       if (dbSettingsArray.length > 0) {
-        setSettings(dbSettingsArray[0]);
+        setSettings({
+          inflation: dbSettingsArray[0].inflation ?? 8.5,
+          expensePeriod: dbSettingsArray[0].expensePeriod ?? 3,
+          useInflation: dbSettingsArray[0].useInflation ?? true,
+          excludeIncomplete: dbSettingsArray[0].excludeIncomplete ?? true,
+          expectedPortfolioReturn: dbSettingsArray[0].expectedPortfolioReturn ?? 10,
+          trinitySWR: dbSettingsArray[0].trinitySWR ?? 4.0,
+          calculationMethod: dbSettingsArray[0].calculationMethod ?? 'PORTFOLIO_YIELD'
+        });
       }
       setAllExpenses(dbExpenses);
     } catch (error) {
@@ -148,7 +155,6 @@ export function FreedomTab() {
       const total = monthsBreakdown.reduce((sum, item) => sum + item.amount, 0);
       average = total / monthsBreakdown.length;
     } else if (currentMonthSum > 0) {
-      // Fallback if no full past months exist
       average = currentMonthSum;
     }
 
@@ -176,43 +182,62 @@ export function FreedomTab() {
     // 3.2 Deficit
     const deficit = Math.max(0, avgExpenses - totalPassiveIncomeKZT);
 
-    // 3.3 Weighted / Default Expected Return
-    let expectedReturn = 10; // default 10%
-    if (sources.length > 0) {
-      const totalW = sources.reduce((s, src) => s + convertToKZT(src.marketValue, src.currency), 0);
-      if (totalW > 0) {
-        const weightedSum = sources.reduce((s, src) => {
-          return s + src.expectedReturn * convertToKZT(src.marketValue, src.currency);
-        }, 0);
-        expectedReturn = weightedSum / totalW;
+    // 3.3 Weighted Return of current assets or default setting
+    let effectiveReturn = settings.expectedPortfolioReturn || 10;
+    if (sources.length > 0 && totalCapitalKZT > 0) {
+      const annualIncomeAllKZT = totalPassiveIncomeKZT * 12;
+      const weightedReturn = (annualIncomeAllKZT / totalCapitalKZT) * 100;
+      if (weightedReturn > 0) {
+        effectiveReturn = weightedReturn;
       }
     }
 
-    // 3.4 Required Additional Capital
-    const requiredCapital = expectedReturn > 0 ? (deficit * 12) / (expectedReturn / 100) : 0;
+    // 3.4 Method A: Portfolio Yield calculation (БЕЗ инфляции)
+    const requiredCapitalTotalYield = effectiveReturn > 0 ? (avgExpenses * 12) / (effectiveReturn / 100) : 0;
+    const requiredAdditionalCapitalYield = effectiveReturn > 0 ? (deficit * 12) / (effectiveReturn / 100) : 0;
 
-    // 3.5 Inflation adjustment
-    // Standard horizon assumption for goal: 5 years or based on accumulation
-    const estimatedYears = deficit > 0 ? Math.min(25, Math.max(3, Math.ceil(requiredCapital / (Math.max(1, avgExpenses * 0.3 * 12))))) : 0;
+    // 3.5 Method B: Trinity Study (Правило 4% / SWR - БЕЗ инфляции)
+    const trinitySWR = settings.trinitySWR || 4.0;
+    const trinityMultiplier = 100 / trinitySWR; // e.g. 25x
+    const trinityRequiredCapitalTotal = avgExpenses > 0 ? (avgExpenses * 12) / (trinitySWR / 100) : 0;
+    const trinityRequiredAdditionalCapital = deficit > 0 ? (deficit * 12) / (trinitySWR / 100) : 0;
+
+    // 3.6 Active Method selection
+    const isTrinity = settings.calculationMethod === 'TRINITY_4PCT';
+    const requiredCapitalTotal = isTrinity ? trinityRequiredCapitalTotal : requiredCapitalTotalYield;
+    const requiredAdditionalCapital = isTrinity ? trinityRequiredAdditionalCapital : requiredAdditionalCapitalYield;
+
+    // 3.7 Capital Progress
+    const capitalProgress = requiredCapitalTotal > 0 
+      ? Math.min(100, (totalCapitalKZT / requiredCapitalTotal) * 100) 
+      : (coverage >= 100 ? 100 : 0);
+
+    // 3.8 Inflation reference for detailed modal
+    const estimatedYears = deficit > 0 ? Math.min(25, Math.max(3, Math.ceil(requiredAdditionalCapital / (Math.max(1, avgExpenses * 0.3 * 12))))) : 0;
     const inflationFactor = settings.useInflation ? Math.pow(1 + (settings.inflation || 8.5) / 100, estimatedYears || 5) : 1;
-    const realCapital = requiredCapital * inflationFactor;
-
-    // 3.6 Total Target Capital
-    const targetCapital = totalCapitalKZT + realCapital;
-
-    // 3.7 Progress
-    const progress = targetCapital > 0 ? Math.min(100, (totalCapitalKZT / targetCapital) * 100) : (coverage >= 100 ? 100 : 0);
+    const realInflationCapital = requiredAdditionalCapital * inflationFactor;
 
     return {
       coverage,
       deficit,
-      expectedReturn,
-      requiredCapital,
-      realCapital,
-      targetCapital,
-      progress,
+      effectiveReturn,
+      trinitySWR,
+      trinityMultiplier,
+      isTrinity,
+      // Method A: Yield
+      requiredCapitalTotalYield,
+      requiredAdditionalCapitalYield,
+      // Method B: Trinity Study
+      trinityRequiredCapitalTotal,
+      trinityRequiredAdditionalCapital,
+      // Active Selection (БЕЗ инфляции)
+      requiredCapitalTotal,
+      requiredAdditionalCapital,
+      capitalProgress,
+      // Inflation details
       estimatedYears,
-      inflationFactor
+      inflationFactor,
+      realInflationCapital
     };
   }, [avgExpenses, totalPassiveIncomeKZT, totalCapitalKZT, sources, settings, rateMap]);
 
@@ -325,7 +350,6 @@ export function FreedomTab() {
     incomeType: 'PERCENT' | 'ABSOLUTE';
     incomePercent?: number;
     incomeAbsolute?: number;
-    expectedReturn: number;
   }) => {
     try {
       const now = new Date().toISOString();
@@ -377,7 +401,7 @@ export function FreedomTab() {
                 {freedomLevel.title}
               </span>
               <span className="text-xs text-blue-200/80 hidden sm:inline">
-                Покрытие: {freedomMetrics.coverage.toFixed(1)}%
+                Покрытие расходов: {freedomMetrics.coverage.toFixed(1)}%
               </span>
             </div>
 
@@ -395,7 +419,7 @@ export function FreedomTab() {
               <button
                 onClick={() => setIsSettingsModalOpen(true)}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 active:bg-white/30 rounded-xl text-xs font-medium text-white backdrop-blur-md border border-white/15 transition-all"
-                title="Настроить инфляцию, период усреднения и курсы валют"
+                title="Настроить инфляцию, Trinity Study, период усреднения и курсы валют"
               >
                 <SettingsIcon className="w-3.5 h-3.5 text-amber-300" />
                 <span>Настройки</span>
@@ -439,18 +463,24 @@ export function FreedomTab() {
               </div>
             </div>
 
-            {/* 3. Target vs Current Capital */}
+            {/* 3. Required Capital (WITHOUT INFLATION) */}
             <div className="bg-white/10 backdrop-blur-md rounded-2xl p-4 border border-white/15 shadow-xs sm:col-span-2 lg:col-span-1">
               <div className="flex items-center justify-between text-blue-200 text-xs font-medium mb-1">
-                <span>Целевой капитал</span>
-                <Coins className="w-4 h-4 text-amber-400" />
+                <span className="flex items-center gap-1.5">
+                  <span>Необходимый капитал</span>
+                </span>
+                <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 px-2 py-0.5 rounded-md font-bold">
+                  без инфляции
+                </span>
               </div>
               <div className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
-                {Math.round(freedomMetrics.targetCapital).toLocaleString('ru-RU')} ₸
+                {Math.round(freedomMetrics.requiredCapitalTotal).toLocaleString('ru-RU')} ₸
               </div>
               <div className="text-[11px] text-blue-200/70 mt-1 flex items-center justify-between">
                 <span>Накоплено: {Math.round(totalCapitalKZT).toLocaleString('ru-RU')} ₸</span>
-                <span className="font-bold text-emerald-300">{freedomMetrics.progress.toFixed(1)}%</span>
+                <span className="font-bold text-emerald-300">
+                  {freedomMetrics.capitalProgress.toFixed(1)}%
+                </span>
               </div>
             </div>
           </div>
@@ -472,9 +502,16 @@ export function FreedomTab() {
                 style={{ width: `${Math.min(freedomMetrics.coverage, 100)}%` }}
               />
             </div>
-            <p className="text-[11px] text-blue-200/70 text-right">
-              {freedomLevel.subtitle}
-            </p>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between text-[11px] text-blue-200/70 gap-1">
+              <span>
+                {freedomMetrics.isTrinity 
+                  ? `Расчёт по Trinity Study (${freedomMetrics.trinitySWR}% / ${freedomMetrics.trinityMultiplier}x расходов)`
+                  : `Расчёт по доходности портфеля (${freedomMetrics.effectiveReturn.toFixed(1)}% годовых)`}
+              </span>
+              <span className="text-blue-100 font-medium sm:text-right">
+                {freedomLevel.subtitle}
+              </span>
+            </div>
           </div>
         </div>
       </div>
@@ -547,8 +584,7 @@ export function FreedomTab() {
                 currency: 'KZT',
                 marketValue: 28000000,
                 incomeType: 'ABSOLUTE',
-                incomeAbsolute: 220000,
-                expectedReturn: 10
+                incomeAbsolute: 220000
               })}
               className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-semibold transition-colors flex items-center gap-1.5"
             >
@@ -562,8 +598,7 @@ export function FreedomTab() {
                 currency: 'KZT',
                 marketValue: 5000000,
                 incomeType: 'PERCENT',
-                incomePercent: 14.5,
-                expectedReturn: 12
+                incomePercent: 14.5
               })}
               className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-semibold transition-colors flex items-center gap-1.5"
             >
@@ -577,8 +612,7 @@ export function FreedomTab() {
                 currency: 'USD',
                 marketValue: 15000,
                 incomeType: 'PERCENT',
-                incomePercent: 7.5,
-                expectedReturn: 9
+                incomePercent: 7.5
               })}
               className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-semibold transition-colors flex items-center gap-1.5"
             >
@@ -593,6 +627,14 @@ export function FreedomTab() {
             const monthlyIncomeKZT = getSourceMonthlyIncomeKZT(source);
             const marketValueKZT = convertToKZT(source.marketValue, source.currency);
             const isForeign = source.currency.toUpperCase() !== 'KZT';
+
+            // Calculate effective annual return for display
+            let annualReturnPercent = 0;
+            if (source.incomeType === 'PERCENT') {
+              annualReturnPercent = source.incomePercent || 0;
+            } else if (source.marketValue > 0) {
+              annualReturnPercent = ((source.incomeAbsolute || 0) * 12 / source.marketValue) * 100;
+            }
 
             return (
               <div 
@@ -661,9 +703,11 @@ export function FreedomTab() {
                           ? `${source.incomePercent || 0}% годовых` 
                           : `${(source.incomeAbsolute || 0).toLocaleString('ru-RU')} ${source.currency}/мес`}
                       </span>
-                      <span className="text-[10px] text-slate-400 block">
-                        Цель: {source.expectedReturn}% год.
-                      </span>
+                      {source.incomeType === 'ABSOLUTE' && (
+                        <span className="text-[10px] text-slate-400 block">
+                          ≈ {annualReturnPercent.toFixed(1)}% годовых
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -711,9 +755,9 @@ export function FreedomTab() {
           </div>
 
           <div className="bg-slate-50 rounded-2xl p-3.5 border border-slate-100">
-            <span className="text-xs text-slate-500 block font-medium">Коэфф. инфляции</span>
-            <span className="text-xl font-bold text-amber-600 block mt-0.5">
-              {settings.useInflation ? `${settings.inflation}%` : 'Выкл'}
+            <span className="text-xs text-slate-500 block font-medium">Капитал по Trinity Study</span>
+            <span className="text-xl font-bold text-indigo-600 block mt-0.5">
+              {Math.round(freedomMetrics.trinityRequiredCapitalTotal).toLocaleString('ru-RU')} ₸
             </span>
           </div>
         </div>
@@ -752,12 +796,14 @@ export function FreedomTab() {
       )}
 
       {/* ========================================================================= */}
-      {/* MODAL 2: SETTINGS & CURRENCY RATES                                        */}
+      {/* MODAL 2: SETTINGS & CURRENCY RATES (WITH TRINITY STUDY)                    */}
       {/* ========================================================================= */}
       {isSettingsModalOpen && (
         <FreedomSettingsModal
           settings={settings}
           currencies={currencies}
+          avgExpenses={avgExpenses}
+          totalPassiveIncome={totalPassiveIncomeKZT}
           onClose={() => setIsSettingsModalOpen(false)}
           onSave={async (newSettings, newCurrencies) => {
             try {
@@ -776,7 +822,7 @@ export function FreedomTab() {
               setSettings(newSettings);
               setCurrencies(newCurrencies);
               setIsSettingsModalOpen(false);
-              showToast('Настройки и курсы валют сохранены');
+              showToast('Настройки и параметры Trinity Study сохранены');
               await loadData();
             } catch (e) {
               console.error(e);
@@ -839,7 +885,7 @@ export function FreedomTab() {
 }
 
 // ------------------------------------------------------------------------------------------------
-// SUB-COMPONENT: ADD/EDIT SOURCE MODAL
+// SUB-COMPONENT: ADD/EDIT SOURCE MODAL (WITH SINGLE UNIFIED YIELD INPUT)
 // ------------------------------------------------------------------------------------------------
 interface AddEditSourceModalProps {
   source: PassiveIncomeSource | null;
@@ -856,21 +902,23 @@ function AddEditSourceModal({ source, currencies, rateMap, onClose, onSave }: Ad
   const [incomeType, setIncomeType] = useState<'PERCENT' | 'ABSOLUTE'>(source?.incomeType || 'PERCENT');
   const [incomePercent, setIncomePercent] = useState<string>(source?.incomePercent ? String(source.incomePercent) : '10');
   const [incomeAbsolute, setIncomeAbsolute] = useState<string>(source?.incomeAbsolute ? String(source.incomeAbsolute) : '');
-  const [expectedReturn, setExpectedReturn] = useState<string>(source ? String(source.expectedReturn) : '10');
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  // Live calculation of income in modal
+  // Live calculation of income and effective annual return in modal
   const liveIncome = useMemo(() => {
     const val = parseFloat(marketValue) || 0;
     const cur = currency.toUpperCase();
     const rate = rateMap[cur] || 1;
 
     let monthlyInCur = 0;
+    let annualPct = 0;
     if (incomeType === 'PERCENT') {
       const pct = parseFloat(incomePercent) || 0;
       monthlyInCur = (val * (pct / 100)) / 12;
+      annualPct = pct;
     } else {
       monthlyInCur = parseFloat(incomeAbsolute) || 0;
+      annualPct = val > 0 ? ((monthlyInCur * 12) / val) * 100 : 0;
     }
 
     const monthlyInKZT = cur === 'KZT' ? monthlyInCur : monthlyInCur * rate;
@@ -879,7 +927,8 @@ function AddEditSourceModal({ source, currencies, rateMap, onClose, onSave }: Ad
     return {
       monthlyInCur: Math.round(monthlyInCur),
       monthlyInKZT: Math.round(monthlyInKZT),
-      totalValKZT: Math.round(totalValKZT)
+      totalValKZT: Math.round(totalValKZT),
+      annualPct: parseFloat(annualPct.toFixed(2))
     };
   }, [marketValue, currency, incomeType, incomePercent, incomeAbsolute, rateMap]);
 
@@ -908,11 +957,6 @@ function AddEditSourceModal({ source, currencies, rateMap, onClose, onSave }: Ad
       }
     }
 
-    const expRet = parseFloat(expectedReturn);
-    if (isNaN(expRet) || expRet <= 0 || expRet > 100) {
-      newErrors.expectedReturn = 'Ожидаемая доходность должна быть от 1 до 100%';
-    }
-
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
       return;
@@ -924,8 +968,7 @@ function AddEditSourceModal({ source, currencies, rateMap, onClose, onSave }: Ad
       marketValue: parseFloat(marketValue),
       incomeType,
       incomePercent: incomeType === 'PERCENT' ? parseFloat(incomePercent) : undefined,
-      incomeAbsolute: incomeType === 'ABSOLUTE' ? parseFloat(incomeAbsolute) : undefined,
-      expectedReturn: parseFloat(expectedReturn)
+      incomeAbsolute: incomeType === 'ABSOLUTE' ? parseFloat(incomeAbsolute) : undefined
     }, source?.id);
   };
 
@@ -1009,10 +1052,10 @@ function AddEditSourceModal({ source, currencies, rateMap, onClose, onSave }: Ad
             </div>
           </div>
 
-          {/* Yield Type Selector */}
+          {/* Single Unified Yield Type Selector */}
           <div>
             <label className="block text-xs font-bold text-gray-700 mb-1.5">
-              Тип доходности *
+              Доходность актива *
             </label>
             <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1 rounded-2xl">
               <button
@@ -1040,7 +1083,7 @@ function AddEditSourceModal({ source, currencies, rateMap, onClose, onSave }: Ad
             </div>
           </div>
 
-          {/* Yield Value Inputs */}
+          {/* Single Yield Input */}
           {incomeType === 'PERCENT' ? (
             <div>
               <label className="block text-xs font-bold text-gray-700 mb-1">
@@ -1086,31 +1129,11 @@ function AddEditSourceModal({ source, currencies, rateMap, onClose, onSave }: Ad
             </div>
           )}
 
-          {/* Expected Return for New Investments */}
-          <div>
-            <label className="block text-xs font-bold text-gray-700 mb-1">
-              Ожидаемая доходность новых вложений (% годовых)
-            </label>
-            <input
-              type="number"
-              step="0.5"
-              value={expectedReturn}
-              onChange={e => {
-                setExpectedReturn(e.target.value);
-                if (errors.expectedReturn) setErrors({ ...errors, expectedReturn: '' });
-              }}
-              placeholder="10"
-              className="w-full px-3.5 py-2.5 rounded-2xl border border-slate-200 bg-slate-50/50 text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-            />
-            <p className="text-[10px] text-slate-400 mt-1">
-              Используется в формуле расчета целевого капитала для покрытия дефицита.
-            </p>
-          </div>
-
           {/* LIVE SUMMARY BANNER */}
-          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 rounded-2xl p-3.5 space-y-1">
-            <span className="text-[11px] font-bold text-blue-900 block">
-              💡 Предпросмотр дохода от актива:
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 rounded-2xl p-3.5 space-y-1.5">
+            <span className="text-[11px] font-bold text-blue-900 block flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+              Предпросмотр дохода от актива:
             </span>
             <div className="flex items-center justify-between text-xs">
               <span className="text-slate-600">В месяц:</span>
@@ -1121,9 +1144,13 @@ function AddEditSourceModal({ source, currencies, rateMap, onClose, onSave }: Ad
             {currency !== 'KZT' && (
               <div className="flex items-center justify-between text-[11px] text-slate-500">
                 <span>В валюте ({currency}):</span>
-                <span>+{liveIncome.monthlyInCur.toLocaleString('ru-RU')} {currency}</span>
+                <span>+{liveIncome.monthlyInCur.toLocaleString('ru-RU')} {currency}/мес</span>
               </div>
             )}
+            <div className="flex items-center justify-between text-[11px] text-indigo-700 pt-0.5 border-t border-blue-200/50 font-semibold">
+              <span>Годовая доходность:</span>
+              <span>{liveIncome.annualPct}% годовых</span>
+            </div>
           </div>
 
           {/* Buttons */}
@@ -1149,24 +1176,40 @@ function AddEditSourceModal({ source, currencies, rateMap, onClose, onSave }: Ad
 }
 
 // ------------------------------------------------------------------------------------------------
-// SUB-COMPONENT: SETTINGS & CURRENCIES MODAL
+// SUB-COMPONENT: SETTINGS MODAL (INCLUDING TRINITY STUDY SETTINGS & LIVE CALCULATION)
 // ------------------------------------------------------------------------------------------------
 interface FreedomSettingsModalProps {
   settings: FreedomSettings;
   currencies: CurrencyRate[];
+  avgExpenses: number;
+  totalPassiveIncome: number;
   onClose: () => void;
   onSave: (newSettings: FreedomSettings, newCurrencies: CurrencyRate[]) => void;
 }
 
-function FreedomSettingsModal({ settings, currencies, onClose, onSave }: FreedomSettingsModalProps) {
+function FreedomSettingsModal({ settings, currencies, avgExpenses, totalPassiveIncome, onClose, onSave }: FreedomSettingsModalProps) {
   const [inflation, setInflation] = useState<string>(String(settings.inflation));
   const [expensePeriod, setExpensePeriod] = useState<number>(settings.expensePeriod);
   const [useInflation, setUseInflation] = useState<boolean>(settings.useInflation);
   const [excludeIncomplete, setExcludeIncomplete] = useState<boolean>(settings.excludeIncomplete);
+  
+  // Trinity Study and Portfolio Return Settings
+  const [trinitySWR, setTrinitySWR] = useState<string>(String(settings.trinitySWR || 4.0));
+  const [expectedPortfolioReturn, setExpectedPortfolioReturn] = useState<string>(String(settings.expectedPortfolioReturn || 10));
+  const [calculationMethod, setCalculationMethod] = useState<'PORTFOLIO_YIELD' | 'TRINITY_4PCT'>(
+    settings.calculationMethod || 'PORTFOLIO_YIELD'
+  );
 
   const [rates, setRates] = useState<CurrencyRate[]>(currencies);
   const [newCurrencyCode, setNewCurrencyCode] = useState('');
   const [newCurrencyRate, setNewCurrencyRate] = useState('');
+
+  // Live Trinity calculation inside settings
+  const parsedSWR = parseFloat(trinitySWR) || 4.0;
+  const trinityMultiplier = parsedSWR > 0 ? 100 / parsedSWR : 25;
+  const liveTrinityRequiredCapital = Math.round(avgExpenses * 12 * trinityMultiplier);
+  const liveDeficit = Math.max(0, avgExpenses - totalPassiveIncome);
+  const liveTrinityDeficitCapital = Math.round(liveDeficit * 12 * trinityMultiplier);
 
   const handleAddCurrency = () => {
     const code = newCurrencyCode.trim().toUpperCase();
@@ -1203,12 +1246,27 @@ function FreedomSettingsModal({ settings, currencies, onClose, onSave }: Freedom
       return;
     }
 
+    const swr = parseFloat(trinitySWR);
+    if (isNaN(swr) || swr <= 0 || swr > 50) {
+      alert('Укажите корректную ставку изъятия по Trinity Study (например 4.0%)');
+      return;
+    }
+
+    const expRet = parseFloat(expectedPortfolioReturn);
+    if (isNaN(expRet) || expRet <= 0 || expRet > 100) {
+      alert('Укажите корректную ожидаемую доходность портфеля (например 10%)');
+      return;
+    }
+
     onSave(
       {
         inflation: inf,
         expensePeriod,
         useInflation,
-        excludeIncomplete
+        excludeIncomplete,
+        trinitySWR: swr,
+        expectedPortfolioReturn: expRet,
+        calculationMethod
       },
       rates
     );
@@ -1221,7 +1279,7 @@ function FreedomSettingsModal({ settings, currencies, onClose, onSave }: Freedom
           <div className="flex items-center gap-2">
             <SettingsIcon className="w-5 h-5 text-amber-500" />
             <h3 className="font-extrabold text-lg text-gray-900">
-              Настройки и Курсы валют
+              Настройки и Trinity Study
             </h3>
           </div>
           <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-600 rounded-xl">
@@ -1230,8 +1288,214 @@ function FreedomSettingsModal({ settings, currencies, onClose, onSave }: Freedom
         </div>
 
         <div className="space-y-5">
-          {/* 1. CURRENCY RATES TABLE */}
-          <div className="space-y-3">
+          {/* 1. TRINITY STUDY (4% RULE) DEDICATED SECTION */}
+          <div className="bg-gradient-to-br from-indigo-50 via-blue-50 to-slate-50 rounded-2xl p-4 border border-indigo-200/80 space-y-3">
+            <div className="flex items-center gap-2">
+              <Award className="w-5 h-5 text-indigo-600" />
+              <h4 className="text-xs sm:text-sm font-extrabold text-indigo-950 uppercase tracking-wide">
+                Необходимый капитал по Trinity Study (Правило 4%)
+              </h4>
+            </div>
+
+            <p className="text-[11px] text-slate-600 leading-relaxed">
+              Классическое финансовое исследование (Trinity University) доказало: при безопасной ставке изъятия <strong>4% годовых</strong> капитал в <strong>25 годовых расходов</strong> сохраняется бессрочно в 95%+ исторических сценариев.
+            </p>
+
+            {/* Live Trinity Result Card */}
+            <div className="bg-white rounded-xl p-3.5 border border-indigo-200 shadow-xs space-y-1">
+              <div className="flex items-center justify-between text-xs text-slate-600">
+                <span>Капитал для 100% расходов:</span>
+                <span className="font-bold text-slate-900">
+                  {avgExpenses.toLocaleString('ru-RU')} ₸ × 12 × {trinityMultiplier.toFixed(1)}x
+                </span>
+              </div>
+              <div className="text-lg sm:text-xl font-extrabold text-indigo-700">
+                {liveTrinityRequiredCapital.toLocaleString('ru-RU')} ₸
+              </div>
+              {liveDeficit > 0 && liveDeficit < avgExpenses && (
+                <div className="text-[11px] text-emerald-700 font-semibold pt-1 border-t border-slate-100 flex items-center justify-between">
+                  <span>С учётом текущего пассивного дохода дефицит:</span>
+                  <span>{liveTrinityDeficitCapital.toLocaleString('ru-RU')} ₸</span>
+                </div>
+              )}
+            </div>
+
+            {/* SWR Preset Buttons */}
+            <div>
+              <label className="block text-[11px] font-bold text-slate-700 mb-1.5">
+                Безопасная ставка изъятия (Safe Withdrawal Rate — SWR):
+              </label>
+              <div className="grid grid-cols-3 gap-1.5 mb-2">
+                <button
+                  type="button"
+                  onClick={() => setTrinitySWR('3.5')}
+                  className={`py-1.5 px-2 rounded-xl text-[11px] font-bold border transition-all ${
+                    trinitySWR === '3.5'
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  3.5% (28.6x)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTrinitySWR('4.0')}
+                  className={`py-1.5 px-2 rounded-xl text-[11px] font-bold border transition-all ${
+                    trinitySWR === '4.0' || trinitySWR === '4'
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  4.0% (25x) ★
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTrinitySWR('5.0')}
+                  className={`py-1.5 px-2 rounded-xl text-[11px] font-bold border transition-all ${
+                    trinitySWR === '5.0' || trinitySWR === '5'
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  5.0% (20x)
+                </button>
+              </div>
+
+              <div className="relative">
+                <input
+                  type="number"
+                  step="0.1"
+                  value={trinitySWR}
+                  onChange={e => setTrinitySWR(e.target.value)}
+                  placeholder="4.0"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-bold focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                />
+                <Percent className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-2.5" />
+              </div>
+            </div>
+          </div>
+
+          {/* 2. CALCULATION METHOD SELECTOR FOR MAIN WIDGET */}
+          <div className="space-y-2">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
+              <Compass className="w-4 h-4 text-blue-600" />
+              Метод расчёта необходимого капитала в виджете
+            </h4>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setCalculationMethod('PORTFOLIO_YIELD')}
+                className={`p-3 rounded-2xl border text-left transition-all ${
+                  calculationMethod === 'PORTFOLIO_YIELD'
+                    ? 'border-blue-600 bg-blue-50/50 shadow-xs'
+                    : 'border-slate-200 bg-slate-50/50 hover:bg-slate-100'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-gray-900">По доходности активов</span>
+                  {calculationMethod === 'PORTFOLIO_YIELD' && <Check className="w-4 h-4 text-blue-600" />}
+                </div>
+                <span className="text-[10px] text-slate-500 block mt-1">
+                  Капитал = Расходы × 12 / Доходность %
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setCalculationMethod('TRINITY_4PCT')}
+                className={`p-3 rounded-2xl border text-left transition-all ${
+                  calculationMethod === 'TRINITY_4PCT'
+                    ? 'border-indigo-600 bg-indigo-50/50 shadow-xs'
+                    : 'border-slate-200 bg-slate-50/50 hover:bg-slate-100'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-gray-900">Trinity Study ({parsedSWR}%)</span>
+                  {calculationMethod === 'TRINITY_4PCT' && <Check className="w-4 h-4 text-indigo-600" />}
+                </div>
+                <span className="text-[10px] text-slate-500 block mt-1">
+                  Капитал = {trinityMultiplier.toFixed(1)}x годовых расходов (FIRE)
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {/* 3. PORTFOLIO BASE RETURN & EXPENSE PERIOD */}
+          <div className="border-t border-slate-100 pt-4 space-y-4">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+              <TrendingUp className="w-4 h-4 text-emerald-600" />
+              Параметры усреднения и доходности
+            </h4>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Expense Averaging Period */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1">
+                  Период расходов
+                </label>
+                <select
+                  value={expensePeriod}
+                  onChange={e => setExpensePeriod(Number(e.target.value))}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50/50 text-xs font-bold focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                >
+                  <option value={1}>1 месяц</option>
+                  <option value={3}>3 месяца (стандарт)</option>
+                  <option value={6}>6 месяцев</option>
+                  <option value={12}>12 месяцев</option>
+                </select>
+              </div>
+
+              {/* Expected Base Portfolio Return */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1">
+                  Базовая доходность (%)
+                </label>
+                <input
+                  type="number"
+                  step="0.5"
+                  value={expectedPortfolioReturn}
+                  onChange={e => setExpectedPortfolioReturn(e.target.value)}
+                  placeholder="10"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50/50 text-xs font-bold focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                />
+              </div>
+            </div>
+
+            {/* Inflation Rate */}
+            <div>
+              <label className="block text-xs font-bold text-gray-700 mb-1">
+                Годовая инфляция (% для справочных расчетов)
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                value={inflation}
+                onChange={e => setInflation(e.target.value)}
+                placeholder="8.5"
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50/50 text-xs font-bold focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+              />
+            </div>
+
+            {/* Toggles */}
+            <div className="space-y-2 pt-1">
+              <label className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl border border-slate-200 cursor-pointer">
+                <div>
+                  <span className="text-xs font-bold text-gray-900 block">Исключать неполный текущий месяц</span>
+                  <span className="text-[10px] text-gray-500 block">Не занижать средние расходы текущим незавершенным месяцем</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={excludeIncomplete}
+                  onChange={e => setExcludeIncomplete(e.target.checked)}
+                  className="w-4 h-4 text-blue-600 rounded-md focus:ring-blue-500"
+                />
+              </label>
+            </div>
+          </div>
+
+          {/* 4. CURRENCY RATES TABLE */}
+          <div className="border-t border-slate-100 pt-4 space-y-3">
             <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
               <DollarSign className="w-4 h-4 text-blue-600" />
               Курсы валют к тенге (1 единица = X ₸)
@@ -1239,21 +1503,21 @@ function FreedomSettingsModal({ settings, currencies, onClose, onSave }: Freedom
 
             <div className="space-y-2">
               {rates.map((c, idx) => (
-                <div key={c.code} className="flex items-center gap-2 bg-slate-50 p-2.5 rounded-2xl border border-slate-200">
-                  <span className="w-16 font-extrabold text-sm text-slate-800 px-2">{c.code}</span>
+                <div key={c.code} className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200">
+                  <span className="w-14 font-extrabold text-xs text-slate-800 px-1">{c.code}</span>
                   <input
                     type="number"
                     step="any"
                     value={c.rate}
                     onChange={e => handleUpdateRate(idx, e.target.value)}
-                    className="flex-1 px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                    className="flex-1 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-bold focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
                   />
                   <span className="text-xs text-slate-500 font-bold px-1">₸</span>
                   {!['USD', 'EUR', 'RUB'].includes(c.code) && (
                     <button
                       type="button"
                       onClick={() => handleDeleteCurrency(idx)}
-                      className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg"
+                      className="p-1 text-slate-400 hover:text-rose-600 rounded-lg"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -1268,8 +1532,8 @@ function FreedomSettingsModal({ settings, currencies, onClose, onSave }: Freedom
                 type="text"
                 value={newCurrencyCode}
                 onChange={e => setNewCurrencyCode(e.target.value)}
-                placeholder="Код (CNY, USDT)"
-                className="w-28 px-3 py-1.5 rounded-xl border border-slate-200 text-xs font-bold uppercase focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                placeholder="Код (CNY)"
+                className="w-24 px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-bold uppercase focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
               />
               <input
                 type="number"
@@ -1277,83 +1541,15 @@ function FreedomSettingsModal({ settings, currencies, onClose, onSave }: Freedom
                 value={newCurrencyRate}
                 onChange={e => setNewCurrencyRate(e.target.value)}
                 placeholder="Курс к ₸"
-                className="flex-1 px-3 py-1.5 rounded-xl border border-slate-200 text-xs font-bold focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                className="flex-1 px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-bold focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
               />
               <button
                 type="button"
                 onClick={handleAddCurrency}
-                className="px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-xl text-xs font-bold transition-colors"
+                className="px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg text-xs font-bold transition-colors"
               >
                 + Добавить
               </button>
-            </div>
-          </div>
-
-          <div className="border-t border-slate-100 pt-4 space-y-4">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
-              <TrendingUp className="w-4 h-4 text-emerald-600" />
-              Параметры расчёта целей
-            </h4>
-
-            {/* Expense Averaging Period */}
-            <div>
-              <label className="block text-xs font-bold text-gray-700 mb-1">
-                Период усреднения расходов
-              </label>
-              <select
-                value={expensePeriod}
-                onChange={e => setExpensePeriod(Number(e.target.value))}
-                className="w-full px-3.5 py-2.5 rounded-2xl border border-slate-200 bg-slate-50/50 text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-              >
-                <option value={1}>1 месяц (последний полный)</option>
-                <option value={3}>3 месяца (рекомендуется)</option>
-                <option value={6}>6 месяцев (сглаживание сезонности)</option>
-                <option value={12}>12 месяцев (годовой цикл)</option>
-              </select>
-            </div>
-
-            {/* Inflation Rate */}
-            <div>
-              <label className="block text-xs font-bold text-gray-700 mb-1">
-                Годовая инфляция (%)
-              </label>
-              <input
-                type="number"
-                step="0.1"
-                value={inflation}
-                onChange={e => setInflation(e.target.value)}
-                placeholder="8.5"
-                className="w-full px-3.5 py-2.5 rounded-2xl border border-slate-200 bg-slate-50/50 text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-              />
-            </div>
-
-            {/* Toggles */}
-            <div className="space-y-3 pt-1">
-              <label className="flex items-center justify-between p-3 bg-slate-50 rounded-2xl border border-slate-200 cursor-pointer">
-                <div>
-                  <span className="text-xs font-bold text-gray-900 block">Учитывать инфляцию</span>
-                  <span className="text-[11px] text-gray-500 block">Корректировать целевой капитал на покупательную способность</span>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={useInflation}
-                  onChange={e => setUseInflation(e.target.checked)}
-                  className="w-5 h-5 text-blue-600 rounded-lg focus:ring-blue-500"
-                />
-              </label>
-
-              <label className="flex items-center justify-between p-3 bg-slate-50 rounded-2xl border border-slate-200 cursor-pointer">
-                <div>
-                  <span className="text-xs font-bold text-gray-900 block">Исключать неполный текущий месяц</span>
-                  <span className="text-[11px] text-gray-500 block">Не занижать средние расходы текущим незавершенным месяцем</span>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={excludeIncomplete}
-                  onChange={e => setExcludeIncomplete(e.target.checked)}
-                  className="w-5 h-5 text-blue-600 rounded-lg focus:ring-blue-500"
-                />
-              </label>
             </div>
           </div>
 
@@ -1381,19 +1577,25 @@ function FreedomSettingsModal({ settings, currencies, onClose, onSave }: Freedom
 }
 
 // ------------------------------------------------------------------------------------------------
-// SUB-COMPONENT: CALCULATION FORMULAS MODAL
+// SUB-COMPONENT: CALCULATION FORMULAS MODAL (WITH TRINITY STUDY BREAKDOWN)
 // ------------------------------------------------------------------------------------------------
 interface FreedomCalculationModalProps {
   metrics: {
     coverage: number;
     deficit: number;
-    expectedReturn: number;
-    requiredCapital: number;
-    realCapital: number;
-    targetCapital: number;
-    progress: number;
-    estimatedYears: number;
+    effectiveReturn: number;
+    trinitySWR: number;
+    trinityMultiplier: number;
+    isTrinity: boolean;
+    requiredCapitalTotalYield: number;
+    requiredAdditionalCapitalYield: number;
+    trinityRequiredCapitalTotal: number;
+    trinityRequiredAdditionalCapital: number;
+    requiredCapitalTotal: number;
+    requiredAdditionalCapital: number;
+    capitalProgress: number;
     inflationFactor: number;
+    realInflationCapital: number;
   };
   avgExpenses: number;
   totalPassiveIncome: number;
@@ -1420,13 +1622,13 @@ function FreedomCalculationModal({ metrics, avgExpenses, totalPassiveIncome, tot
 
         <div className="space-y-4 text-xs sm:text-sm text-slate-700">
           <p className="text-slate-500 text-xs leading-relaxed">
-            Расчёт базируется на принципах правила 4% (Trinity Study) с адаптацией под доходность активов и инфляцию в Казахстане.
+            Расчёт точки финансовой свободы опирается на две основные методики: расчёт по доходности активов и международный стандарт <strong>Trinity Study (Правило 4% / FIRE)</strong>.
           </p>
 
           {/* Formula 1: Coverage */}
           <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-2">
             <div className="flex items-center justify-between font-bold text-gray-900">
-              <span>1. Коэффициент покрытия</span>
+              <span>1. Коэффициент покрытия расходов</span>
               <span className="text-blue-600 font-extrabold">{metrics.coverage.toFixed(1)}%</span>
             </div>
             <code className="block bg-white p-2 rounded-xl border border-slate-200 text-slate-800 text-[11px]">
@@ -1451,47 +1653,47 @@ function FreedomCalculationModal({ metrics, avgExpenses, totalPassiveIncome, tot
             </p>
           </div>
 
-          {/* Formula 3: Required Capital */}
-          <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-2">
-            <div className="flex items-center justify-between font-bold text-gray-900">
-              <span>3. Необходимый капитал (без инфляции)</span>
-              <span className="text-gray-900 font-extrabold">{Math.round(metrics.requiredCapital).toLocaleString('ru-RU')} ₸</span>
+          {/* Formula 3: Required Capital WITHOUT Inflation */}
+          <div className="bg-blue-50/60 rounded-2xl p-4 border border-blue-200 space-y-2">
+            <div className="flex items-center justify-between font-bold text-blue-950">
+              <span>3. Необходимый капитал (по доходности активов)</span>
+              <span className="text-blue-700 font-extrabold">{Math.round(metrics.requiredCapitalTotalYield).toLocaleString('ru-RU')} ₸</span>
             </div>
-            <code className="block bg-white p-2 rounded-xl border border-slate-200 text-slate-800 text-[11px]">
-              НеобходимыйКапитал = (Дефицит × 12) / ОжидаемаяДоходность × 100
+            <code className="block bg-white p-2 rounded-xl border border-blue-200 text-slate-800 text-[11px]">
+              Капитал = (Расходы × 12) / (Доходность / 100)
             </code>
-            <p className="text-[11px] text-slate-500">
-              = ({Math.round(metrics.deficit).toLocaleString('ru-RU')} × 12) / {metrics.expectedReturn.toFixed(1)}% = {Math.round(metrics.requiredCapital).toLocaleString('ru-RU')} ₸
+            <p className="text-[11px] text-slate-600">
+              = ({avgExpenses.toLocaleString('ru-RU')} × 12) / {metrics.effectiveReturn.toFixed(1)}% = {Math.round(metrics.requiredCapitalTotalYield).toLocaleString('ru-RU')} ₸
             </p>
           </div>
 
-          {/* Formula 4: Inflation Adjusted */}
-          <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-2">
-            <div className="flex items-center justify-between font-bold text-gray-900">
-              <span>4. Капитал с учётом инфляции ({settings.inflation}%)</span>
-              <span className="text-amber-700 font-extrabold">{Math.round(metrics.realCapital).toLocaleString('ru-RU')} ₸</span>
+          {/* Formula 4: Trinity Study (4% Rule) */}
+          <div className="bg-indigo-50/60 rounded-2xl p-4 border border-indigo-200 space-y-2">
+            <div className="flex items-center justify-between font-bold text-indigo-950">
+              <span>4. Необходимый капитал по Trinity Study (Правило 4%)</span>
+              <span className="text-indigo-700 font-extrabold">{Math.round(metrics.trinityRequiredCapitalTotal).toLocaleString('ru-RU')} ₸</span>
             </div>
-            <code className="block bg-white p-2 rounded-xl border border-slate-200 text-slate-800 text-[11px]">
-              ИнфляционныйФактор = (1 + Инфляция/100)^Годы ({metrics.inflationFactor.toFixed(2)}x)
+            <code className="block bg-white p-2 rounded-xl border border-indigo-200 text-slate-800 text-[11px]">
+              Капитал Trinity = Расходы × 12 × {metrics.trinityMultiplier.toFixed(1)} (при SWR {metrics.trinitySWR}%)
             </code>
-            <p className="text-[11px] text-slate-500">
-              = {Math.round(metrics.requiredCapital).toLocaleString('ru-RU')} ₸ × {metrics.inflationFactor.toFixed(2)} = {Math.round(metrics.realCapital).toLocaleString('ru-RU')} ₸
+            <p className="text-[11px] text-slate-600">
+              = {avgExpenses.toLocaleString('ru-RU')} ₸ × 12 × {metrics.trinityMultiplier.toFixed(1)} = {Math.round(metrics.trinityRequiredCapitalTotal).toLocaleString('ru-RU')} ₸
             </p>
           </div>
 
-          {/* Formula 5: Total Target Capital & Progress */}
+          {/* Summary Box */}
           <div className="bg-gradient-to-br from-indigo-900 to-slate-900 text-white rounded-2xl p-4 space-y-2 shadow-md">
             <div className="flex items-center justify-between font-bold text-white">
-              <span>5. Общий целевой капитал</span>
+              <span>Итог (активный метод: {metrics.isTrinity ? `Trinity ${metrics.trinitySWR}%` : `Доходность ${metrics.effectiveReturn.toFixed(1)}%`})</span>
               <span className="text-emerald-400 font-extrabold text-base">
-                {Math.round(metrics.targetCapital).toLocaleString('ru-RU')} ₸
+                {Math.round(metrics.requiredCapitalTotal).toLocaleString('ru-RU')} ₸
               </span>
             </div>
             <div className="text-xs text-blue-200/80 space-y-1 pt-1">
-              <p>• Накопленный капитал: {Math.round(totalCapital).toLocaleString('ru-RU')} ₸</p>
-              <p>• Требуется донакопить: {Math.round(metrics.realCapital).toLocaleString('ru-RU')} ₸</p>
+              <p>• Накопленный капитал в активах: {Math.round(totalCapital).toLocaleString('ru-RU')} ₸</p>
+              <p>• Осталось донакопить (без инфляции): {Math.round(metrics.requiredAdditionalCapital).toLocaleString('ru-RU')} ₸</p>
               <p className="font-bold text-white pt-1">
-                Общий прогресс: {metrics.progress.toFixed(1)}%
+                Прогресс формирования капитала: {metrics.capitalProgress.toFixed(1)}%
               </p>
             </div>
           </div>

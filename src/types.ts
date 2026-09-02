@@ -76,7 +76,7 @@ export interface PassiveIncomeSource {
   incomeType: IncomeYieldType; // 'PERCENT' | 'ABSOLUTE'
   incomePercent?: number; // annual % if PERCENT
   incomeAbsolute?: number; // monthly income in asset currency if ABSOLUTE
-  expectedReturn: number; // % for target capital calculation (e.g. 10%)
+  expectedReturn?: number; // optional legacy field
   createdAt?: string;
   updatedAt?: string;
 }
@@ -95,5 +95,8 @@ export interface FreedomSettings {
   expensePeriod: number; // 1, 3, 6, 12 months
   useInflation: boolean;
   excludeIncomplete: boolean;
+  expectedPortfolioReturn?: number; // e.g. 10 (%) - Ожидаемая доходность портфеля для расчёта капитала
+  trinitySWR?: number; // e.g. 4.0 (%) - Safe Withdrawal Rate по Trinity Study (правило 4%)
+  calculationMethod?: 'PORTFOLIO_YIELD' | 'TRINITY_4PCT'; // Метод расчёта в виджете
 }
 
