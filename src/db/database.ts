@@ -75,7 +75,7 @@ export class FinanceDatabase extends Dexie {
     }).upgrade(async (tx) => {
       // Миграция при переходе на v3: гарантируем корректные типы и поля
       const expensesTable = tx.table('expenses');
-      await expensesTable.toCollection().modify((expense: Transaction) => {
+      await expensesTable.toCollection().modify((expense: any) => {
         if (expense.type === 'expense') {
           if (!expense.necessity) expense.necessity = 'mandatory';
           if (!expense.frequency) expense.frequency = 'regular';
@@ -105,6 +105,41 @@ export class FinanceDatabase extends Dexie {
       freedomSources: '++id, name, currency, incomeType',
       freedomCurrencies: '++id, code',
       freedomSettings: '++id'
+    });
+
+    // Версия 6 (Новые признаки расходов: Базовые обязательства / Инвестиции в рост / Утечки + Бюджетное распределение)
+    this.version(6).stores({
+      expenses: '++id, amount, category, method, date, type, expenseRole, budgetDestination, incomeFrequency',
+      categories: '++id, name, type',
+      methods: '++id, name',
+      budgets: '++id, period, category, type, [period+category]',
+      reallocations: '++id, period, date',
+      freedomSources: '++id, name, currency, incomeType',
+      freedomCurrencies: '++id, code',
+      freedomSettings: '++id'
+    }).upgrade(async (tx) => {
+      const expensesTable = tx.table('expenses');
+      await expensesTable.toCollection().modify((expense: any) => {
+        if (expense.type === 'expense') {
+          // Миграция существующих данных: обязательные -> базовые обязательства, необязательные -> утечки
+          if (!expense.expenseRole) {
+            if (expense.necessity === 'mandatory') {
+              expense.expenseRole = 'basic';
+            } else if (expense.necessity === 'optional') {
+              expense.expenseRole = 'leak';
+            } else {
+              expense.expenseRole = 'basic';
+            }
+          }
+          if (!expense.budgetDestination) {
+            expense.budgetDestination = 'monthly';
+          }
+          // Удаляем старые признаки
+          delete expense.necessity;
+          delete expense.frequency;
+          delete expense.planning;
+        }
+      });
     });
   }
 }
@@ -237,7 +272,7 @@ export async function exportAllDataToJSON(): Promise<string> {
 
   const backup: BackupDataSchema = {
     app: 'LocalFirstFinance',
-    version: 5,
+    version: 6,
     exportDate: new Date().toISOString(),
     expenses,
     categories,
@@ -306,22 +341,42 @@ export async function importDataFromJSON(jsonString: string): Promise<{
   const rawFreedomCurrencies: any[] = Array.isArray(parsed.freedomCurrencies) ? parsed.freedomCurrencies : [];
   const rawFreedomSettings = parsed.freedomSettings && typeof parsed.freedomSettings === 'object' ? parsed.freedomSettings : null;
 
-  // Нормализация и проверка записей транзакций (защита от сломанных полей)
-  const cleanExpenses: Transaction[] = rawExpenses.map(item => ({
-    id: typeof item.id === 'number' ? item.id : undefined,
-    amount: Number(item.amount) || 0,
-    category: String(item.category || 'Без категории'),
-    method: String(item.method || 'Карта'),
-    date: String(item.date || new Date().toISOString().split('T')[0]),
-    type: item.type === 'income' ? 'income' : 'expense',
-    note: item.note ? String(item.note) : undefined,
-    createdAt: item.createdAt ? String(item.createdAt) : undefined,
-    necessity: item.necessity === 'optional' ? 'optional' : 'mandatory',
-    frequency: item.frequency === 'one_off' ? 'one_off' : 'regular',
-    planning: item.planning === 'unplanned' ? 'unplanned' : 'planned',
-    incomeFrequency: item.incomeFrequency === 'irregular' ? 'irregular' : 'regular',
-    receiptImage: item.receiptImage ? String(item.receiptImage) : undefined
-  }));
+  // Нормализация и проверка записей транзакций (защита от сломанных полей и плавный маппинг старых полей)
+  const cleanExpenses: Transaction[] = rawExpenses.map(item => {
+    let expenseRole: 'basic' | 'growth' | 'leak' | undefined = undefined;
+    let budgetDestination: 'monthly' | 'next_year' | 'next_month' | 'reserve' | undefined = undefined;
+
+    if (item.type === 'expense' || !item.type) {
+      if (item.expenseRole === 'growth') {
+        expenseRole = 'growth';
+      } else if (item.expenseRole === 'leak' || item.necessity === 'optional') {
+        expenseRole = 'leak';
+      } else {
+        expenseRole = 'basic';
+      }
+
+      if (['monthly', 'next_year', 'next_month', 'reserve'].includes(item.budgetDestination)) {
+        budgetDestination = item.budgetDestination;
+      } else {
+        budgetDestination = 'monthly';
+      }
+    }
+
+    return {
+      id: typeof item.id === 'number' ? item.id : undefined,
+      amount: Number(item.amount) || 0,
+      category: String(item.category || 'Без категории'),
+      method: String(item.method || 'Карта'),
+      date: String(item.date || new Date().toISOString().split('T')[0]),
+      type: item.type === 'income' ? 'income' : 'expense',
+      note: item.note ? String(item.note) : undefined,
+      createdAt: item.createdAt ? String(item.createdAt) : undefined,
+      expenseRole,
+      budgetDestination,
+      incomeFrequency: item.incomeFrequency === 'irregular' ? 'irregular' : 'regular',
+      receiptImage: item.receiptImage ? String(item.receiptImage) : undefined
+    };
+  });
 
   // Нормализация категорий с дедупликацией
   const seenCategoryKeys = new Set<string>();

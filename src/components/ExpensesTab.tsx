@@ -1,15 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../db/database';
 import type { 
   Transaction, 
   Category, 
   PaymentMethod, 
-  ExpenseNecessity, 
-  ExpenseFrequency, 
-  ExpensePlanning, 
+  ExpenseRole, 
+  BudgetDestination, 
   IncomeFrequency 
 } from '../types';
 import { EditTransactionModal } from './EditTransactionModal';
+import { syncExpenseToBudget } from '../utils/budgetDestinationSync';
 import { 
   PlusCircle, 
   Trash2, 
@@ -31,10 +31,30 @@ import {
   Pencil,
   Receipt,
   Camera,
-  Image as ImageIcon
+  Image as ImageIcon,
+  ShieldCheck,
+  Rocket,
+  Flame,
+  PiggyBank,
+  CalendarRange,
+  Clock,
+  Layers,
+  BarChart3
 } from 'lucide-react';
 import { ReceiptUpload } from './ReceiptUpload';
 import { ReceiptViewerModal } from './ReceiptViewerModal';
+import {
+  ResponsiveContainer,
+  ComposedChart,
+  Area,
+  Line,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend
+} from 'recharts';
 
 export const ExpensesTab: React.FC = () => {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -54,10 +74,9 @@ export const ExpensesTab: React.FC = () => {
   const [note, setNote] = useState<string>('');
   const [receiptImage, setReceiptImage] = useState<string | undefined>(undefined);
 
-  // Expense Attribute States
-  const [necessity, setNecessity] = useState<ExpenseNecessity>('mandatory');
-  const [frequency, setFrequency] = useState<ExpenseFrequency>('one_off');
-  const [planning, setPlanning] = useState<ExpensePlanning>('planned');
+  // Категория расхода (3 категории)
+  const [expenseRole, setExpenseRole] = useState<ExpenseRole>('basic');
+  const [budgetDestination, setBudgetDestination] = useState<BudgetDestination>('none');
 
   // Income Attribute State
   const [incomeFrequency, setIncomeFrequency] = useState<IncomeFrequency>('regular');
@@ -66,11 +85,13 @@ export const ExpensesTab: React.FC = () => {
   const [search, setSearch] = useState<string>('');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('all');
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<string>('all');
-  const [selectedNecessityFilter, setSelectedNecessityFilter] = useState<string>('all');
-  const [selectedFrequencyFilter, setSelectedFrequencyFilter] = useState<string>('all');
-  const [selectedPlanningFilter, setSelectedPlanningFilter] = useState<string>('all');
+  const [selectedRoleFilter, setSelectedRoleFilter] = useState<string>('all');
+  const [selectedDestinationFilter, setSelectedDestinationFilter] = useState<string>('all');
   const [selectedReceiptFilter, setSelectedReceiptFilter] = useState<string>('all');
   const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(false);
+
+  // Переключатель масштаба динамики на главной странице затрат (по дням / по месяцам)
+  const [dynamicsGranularity, setDynamicsGranularity] = useState<'days' | 'months'>('months');
 
   const loadData = async () => {
     const cats = await db.categories.toArray();
@@ -108,13 +129,11 @@ export const ExpensesTab: React.FC = () => {
     setCategory(catName);
     if (type === 'expense') {
       if (['Жилье и КУ', 'Продукты', 'Здоровье', 'Транспорт'].includes(catName)) {
-        setNecessity('mandatory');
-      } else if (['Развлечения', 'Кафе и Рестораны', 'Одежда'].includes(catName)) {
-        setNecessity('optional');
-      }
-
-      if (['Жилье и КУ'].includes(catName)) {
-        setFrequency('regular');
+        setExpenseRole('basic');
+      } else if (['Инвестиции', 'Обучение', 'Книги', 'Спорт'].includes(catName)) {
+        setExpenseRole('growth');
+      } else if (['Развлечения', 'Кафе и Рестораны', 'Одежда', 'Спонтанные покупки'].includes(catName)) {
+        setExpenseRole('leak');
       }
     } else {
       if (['Зарплата'].includes(catName)) {
@@ -151,15 +170,30 @@ export const ExpensesTab: React.FC = () => {
       receiptImage: receiptImage || undefined,
       createdAt: new Date().toISOString(),
       ...(type === 'expense'
-        ? { necessity, frequency, planning }
+        ? { expenseRole, budgetDestination }
         : { incomeFrequency })
     };
 
     await db.expenses.add(newTx);
 
+    // Автоматическое внесение статьи расхода в соответствующий бюджет (Пункт 2 ТЗ)
+    if (type === 'expense') {
+      try {
+        await syncExpenseToBudget({
+          amount: numAmount,
+          category,
+          date,
+          destination: budgetDestination
+        });
+      } catch (err) {
+        console.error('Ошибка синхронизации с бюджетом:', err);
+      }
+    }
+
     setAmount('');
     setNote('');
     setReceiptImage(undefined);
+    setBudgetDestination('none');
     loadData();
   };
 
@@ -181,25 +215,21 @@ export const ExpensesTab: React.FC = () => {
     const matchesCategory = selectedCategoryFilter === 'all' || t.category === selectedCategoryFilter;
     const matchesType = selectedTypeFilter === 'all' || t.type === selectedTypeFilter;
 
-    // Attribute filters
-    const matchesNecessity = selectedNecessityFilter === 'all' || 
-      (t.type === 'expense' && (t.necessity || 'mandatory') === selectedNecessityFilter);
+    // Фильтры по категориям расхода и планам будущих периодов
+    const matchesRole = selectedRoleFilter === 'all' || 
+      (t.type === 'expense' && (t.expenseRole || 'basic') === selectedRoleFilter);
 
-    const matchesFrequency = selectedFrequencyFilter === 'all' || 
-      (t.type === 'expense' && (t.frequency || 'one_off') === selectedFrequencyFilter) ||
-      (t.type === 'income' && (t.incomeFrequency || 'regular') === selectedFrequencyFilter);
-
-    const matchesPlanning = selectedPlanningFilter === 'all' || 
-      (t.type === 'expense' && (t.planning || 'planned') === selectedPlanningFilter);
+    const matchesDestination = selectedDestinationFilter === 'all' || 
+      (t.type === 'expense' && (t.budgetDestination || 'none') === selectedDestinationFilter);
 
     const matchesReceipt = selectedReceiptFilter === 'all' ||
       (selectedReceiptFilter === 'with_receipt' && !!t.receiptImage) ||
       (selectedReceiptFilter === 'without_receipt' && !t.receiptImage);
 
-    return matchesSearch && matchesCategory && matchesType && matchesNecessity && matchesFrequency && matchesPlanning && matchesReceipt;
+    return matchesSearch && matchesCategory && matchesType && matchesRole && matchesDestination && matchesReceipt;
   });
 
-  // Calculate Totals
+  // Calculate Totals for top cards
   const totalIncome = transactions
     .filter(t => t.type === 'income')
     .reduce((sum, t) => sum + t.amount, 0);
@@ -209,6 +239,99 @@ export const ExpensesTab: React.FC = () => {
     .reduce((sum, t) => sum + t.amount, 0);
 
   const netBalance = totalIncome - totalExpense;
+
+  // -------------------------------------------------------------
+  // ДИНАМИКА ДОЛИ БАЗОВЫХ ОБЯЗАТЕЛЬСТВ И ИНВЕСТИЦИЙ В РОСТ (Пункт 3 ТЗ)
+  // -------------------------------------------------------------
+  const dynamicsData = useMemo(() => {
+    const expenseOnly = transactions.filter(t => t.type === 'expense' || !t.type);
+    if (expenseOnly.length === 0) return { chartPoints: [], overallStats: { basicShare: 0, growthShare: 0, leakShare: 0, totalBasic: 0, totalGrowth: 0, totalLeak: 0, totalExp: 0 } };
+
+    // Собираем суммы по категориям роли
+    let totalBasic = 0;
+    let totalGrowth = 0;
+    let totalLeak = 0;
+
+    // Группировка по ключу периода (День: YYYY-MM-DD или Месяц: YYYY-MM)
+    const grouped: {
+      [key: string]: {
+        label: string;
+        dateSort: string;
+        basic: number;
+        growth: number;
+        leak: number;
+        total: number;
+      };
+    } = {};
+
+    expenseOnly.forEach(t => {
+      const role = t.expenseRole || 'basic';
+      const amt = t.amount || 0;
+
+      if (role === 'basic') totalBasic += amt;
+      else if (role === 'growth') totalGrowth += amt;
+      else if (role === 'leak') totalLeak += amt;
+
+      const dateStr = t.date || new Date().toISOString().split('T')[0];
+      const key = dynamicsGranularity === 'days' ? dateStr : dateStr.substring(0, 7);
+
+      if (!grouped[key]) {
+        let label = key;
+        if (dynamicsGranularity === 'days') {
+          const parts = dateStr.split('-');
+          label = `${parts[2]}.${parts[1]}`;
+        } else {
+          const [y, m] = key.split('-');
+          const d = new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1);
+          label = d.toLocaleDateString('ru-RU', { month: 'short', year: '2-digit' });
+        }
+        grouped[key] = { label, dateSort: key, basic: 0, growth: 0, leak: 0, total: 0 };
+      }
+
+      if (role === 'basic') grouped[key].basic += amt;
+      else if (role === 'growth') grouped[key].growth += amt;
+      else if (role === 'leak') grouped[key].leak += amt;
+      grouped[key].total += amt;
+    });
+
+    const totalExp = totalBasic + totalGrowth + totalLeak;
+    const overallBasicShare = totalExp > 0 ? Math.round((totalBasic / totalExp) * 1000) / 10 : 0;
+    const overallGrowthShare = totalExp > 0 ? Math.round((totalGrowth / totalExp) * 1000) / 10 : 0;
+    const overallLeakShare = totalExp > 0 ? Math.round((totalLeak / totalExp) * 1000) / 10 : 0;
+
+    const chartPoints = Object.values(grouped)
+      .sort((a, b) => a.dateSort.localeCompare(b.dateSort))
+      .map(item => {
+        const basicPercent = item.total > 0 ? Math.round((item.basic / item.total) * 1000) / 10 : 0;
+        const growthPercent = item.total > 0 ? Math.round((item.growth / item.total) * 1000) / 10 : 0;
+        const leakPercent = item.total > 0 ? Math.round((item.leak / item.total) * 1000) / 10 : 0;
+
+        return {
+          label: item.label,
+          fullDate: item.dateSort,
+          basic: item.basic,
+          growth: item.growth,
+          leak: item.leak,
+          total: item.total,
+          basicPercent,
+          growthPercent,
+          leakPercent
+        };
+      });
+
+    return {
+      chartPoints,
+      overallStats: {
+        basicShare: overallBasicShare,
+        growthShare: overallGrowthShare,
+        leakShare: overallLeakShare,
+        totalBasic,
+        totalGrowth,
+        totalLeak,
+        totalExp
+      }
+    };
+  }, [transactions, dynamicsGranularity]);
 
   return (
     <div className="space-y-6">
@@ -249,6 +372,200 @@ export const ExpensesTab: React.FC = () => {
             <TrendingDown className="w-6 h-6" />
           </div>
         </div>
+      </div>
+
+      {/* 3. НОВЫЙ БЛОК: Динамика доли базовых обязательств и инвестиций в рост (за весь период) */}
+      <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+                <BarChart3 className="w-5 h-5" />
+              </div>
+              <h2 className="text-base sm:text-lg font-bold text-gray-900">
+                Динамика структуры расходов: Базовые обязательства и Рост
+              </h2>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">
+              Отслеживание доли обязательных трат, инвестиций в будущее и утечек за весь период
+            </p>
+          </div>
+
+          {/* Granularity switch: Дни / Месяцы */}
+          <div className="flex items-center bg-gray-100 p-1 rounded-xl text-xs font-semibold self-start sm:self-auto">
+            <button
+              type="button"
+              onClick={() => setDynamicsGranularity('days')}
+              className={`px-3 py-1.5 rounded-lg transition-all ${
+                dynamicsGranularity === 'days'
+                  ? 'bg-white text-indigo-700 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              По дням
+            </button>
+            <button
+              type="button"
+              onClick={() => setDynamicsGranularity('months')}
+              className={`px-3 py-1.5 rounded-lg transition-all ${
+                dynamicsGranularity === 'months'
+                  ? 'bg-white text-indigo-700 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              По месяцам
+            </button>
+          </div>
+        </div>
+
+        {/* Aggregate KPI cards for the whole period */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {/* Базовые обязательства */}
+          <div className="p-3.5 rounded-xl border border-blue-200/80 bg-blue-50/40">
+            <div className="flex items-center justify-between text-xs text-blue-900 font-bold mb-1">
+              <span className="flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-blue-600" />
+                Базовые обязательства
+              </span>
+              <span className="text-blue-700 font-extrabold text-sm">
+                {dynamicsData.overallStats.basicShare}%
+              </span>
+            </div>
+            <p className="text-base sm:text-lg font-bold text-gray-900">
+              {dynamicsData.overallStats.totalBasic.toLocaleString('ru-RU')} ₸
+            </p>
+            <div className="h-1.5 w-full bg-blue-100 rounded-full mt-2 overflow-hidden">
+              <div 
+                className="bg-blue-600 h-full rounded-full transition-all duration-500"
+                style={{ width: `${dynamicsData.overallStats.basicShare}%` }}
+              />
+            </div>
+          </div>
+
+          {/* Инвестиции в рост */}
+          <div className="p-3.5 rounded-xl border border-emerald-200/80 bg-emerald-50/40">
+            <div className="flex items-center justify-between text-xs text-emerald-900 font-bold mb-1">
+              <span className="flex items-center gap-1.5">
+                <Rocket className="w-4 h-4 text-emerald-600" />
+                Инвестиции в рост
+              </span>
+              <span className="text-emerald-700 font-extrabold text-sm">
+                {dynamicsData.overallStats.growthShare}%
+              </span>
+            </div>
+            <p className="text-base sm:text-lg font-bold text-gray-900">
+              {dynamicsData.overallStats.totalGrowth.toLocaleString('ru-RU')} ₸
+            </p>
+            <div className="h-1.5 w-full bg-emerald-100 rounded-full mt-2 overflow-hidden">
+              <div 
+                className="bg-emerald-600 h-full rounded-full transition-all duration-500"
+                style={{ width: `${dynamicsData.overallStats.growthShare}%` }}
+              />
+            </div>
+          </div>
+
+          {/* Утечки */}
+          <div className="p-3.5 rounded-xl border border-rose-200/80 bg-rose-50/40">
+            <div className="flex items-center justify-between text-xs text-rose-900 font-bold mb-1">
+              <span className="flex items-center gap-1.5">
+                <Flame className="w-4 h-4 text-rose-600" />
+                Утечки (спонтанные/лишние)
+              </span>
+              <span className="text-rose-700 font-extrabold text-sm">
+                {dynamicsData.overallStats.leakShare}%
+              </span>
+            </div>
+            <p className="text-base sm:text-lg font-bold text-gray-900">
+              {dynamicsData.overallStats.totalLeak.toLocaleString('ru-RU')} ₸
+            </p>
+            <div className="h-1.5 w-full bg-rose-100 rounded-full mt-2 overflow-hidden">
+              <div 
+                className="bg-rose-500 h-full rounded-full transition-all duration-500"
+                style={{ width: `${dynamicsData.overallStats.leakShare}%` }}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Dynamics Area / Composed Chart */}
+        {dynamicsData.chartPoints.length > 0 ? (
+          <div className="pt-2">
+            <div className="h-64 sm:h-72 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={dynamicsData.chartPoints}>
+                  <defs>
+                    <linearGradient id="growthGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.4} />
+                      <stop offset="95%" stopColor="#10b981" stopOpacity={0.0} />
+                    </linearGradient>
+                    <linearGradient id="basicGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.4} />
+                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                  <YAxis 
+                    yAxisId="share" 
+                    orientation="left" 
+                    unit="%" 
+                    domain={[0, 100]} 
+                    tick={{ fontSize: 11 }} 
+                  />
+                  <YAxis 
+                    yAxisId="amount" 
+                    orientation="right" 
+                    tick={{ fontSize: 11 }} 
+                    tickFormatter={(v) => `${Math.round(v / 1000)}k`} 
+                  />
+                  <Tooltip
+                    formatter={(val: any, name: string) => {
+                      if (name.includes('Доля')) return [`${val}%`, name];
+                      return [`${Number(val).toLocaleString('ru-RU')} ₸`, name];
+                    }}
+                    labelFormatter={(label) => `Период: ${label}`}
+                  />
+                  <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '11px' }} />
+                  <Area
+                    yAxisId="share"
+                    type="monotone"
+                    dataKey="basicPercent"
+                    name="Доля базовых обязательств (%)"
+                    stroke="#2563eb"
+                    strokeWidth={2}
+                    fill="url(#basicGrad)"
+                  />
+                  <Area
+                    yAxisId="share"
+                    type="monotone"
+                    dataKey="growthPercent"
+                    name="Доля инвестиций в рост (%)"
+                    stroke="#059669"
+                    strokeWidth={2.5}
+                    fill="url(#growthGrad)"
+                  />
+                  <Line
+                    yAxisId="share"
+                    type="monotone"
+                    dataKey="leakPercent"
+                    name="Доля утечек (%)"
+                    stroke="#e11d48"
+                    strokeWidth={2}
+                    strokeDasharray="4 4"
+                    dot={{ r: 3 }}
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+            <p className="text-[11px] text-gray-500 text-center mt-1">
+              💡 Здоровая финансовая модель: снижать долю утечек, стабильно держать базовые обязательства и максимизировать долю инвестиций в рост.
+            </p>
+          </div>
+        ) : (
+          <div className="py-8 text-center text-gray-400 text-xs border border-dashed border-gray-200 rounded-xl">
+            Данные по расходам отсутствуют для построения динамики
+          </div>
+        )}
       </div>
 
       {/* Add Transaction Form */}
@@ -358,106 +675,137 @@ export const ExpensesTab: React.FC = () => {
             </div>
           </div>
 
-          {/* ATTRIBUTES SECTION */}
+          {/* КАТЕГОРИИ РАСХОДА (Базовые обязательства / Инвестиции в рост / Утечки) */}
           {type === 'expense' ? (
-            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200/70 space-y-3">
-              <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700 uppercase tracking-wider">
-                <SlidersHorizontal className="w-3.5 h-3.5 text-blue-600" />
-                Признаки расхода
+            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200/70 space-y-4">
+              {/* 1. Три категории расхода */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Категория расхода:
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setExpenseRole('basic')}
+                    className={`py-2 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5 border ${
+                      expenseRole === 'basic'
+                        ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-blue-300'
+                    }`}
+                  >
+                    <ShieldCheck className="w-4 h-4" />
+                    Базовые обязательства
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setExpenseRole('growth')}
+                    className={`py-2 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5 border ${
+                      expenseRole === 'growth'
+                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-emerald-300'
+                    }`}
+                  >
+                    <Rocket className="w-4 h-4" />
+                    Инвестиции в рост
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setExpenseRole('leak')}
+                    className={`py-2 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5 border ${
+                      expenseRole === 'leak'
+                        ? 'bg-rose-600 text-white border-rose-600 shadow-sm'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-rose-300'
+                    }`}
+                  >
+                    <Flame className="w-4 h-4" />
+                    Утечки (лишнее/спонтанное)
+                  </button>
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {/* 1. Обязательное / Необязательное */}
-                <div>
-                  <label className="block text-[11px] font-medium text-slate-600 mb-1.5">
-                    Обязательность
+              {/* 2. Добавление внесенной статьи в планы расходов будущих периодов */}
+              <div className="pt-2 border-t border-slate-200/60">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Добавить статью расхода в план будущих периодов:
                   </label>
-                  <div className="grid grid-cols-2 gap-1 bg-white p-1 rounded-lg border border-slate-200 text-xs">
+                  {budgetDestination !== 'none' && (
                     <button
                       type="button"
-                      onClick={() => setNecessity('mandatory')}
-                      className={`py-1.5 px-2 rounded-md font-medium text-center transition-all ${
-                        necessity === 'mandatory'
-                          ? 'bg-blue-600 text-white shadow-xs'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
+                      onClick={() => setBudgetDestination('none')}
+                      className="text-[11px] text-gray-500 hover:text-rose-600 underline"
                     >
-                      Обязательное
+                      Не добавлять в планы
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setNecessity('optional')}
-                      className={`py-1.5 px-2 rounded-md font-medium text-center transition-all ${
-                        necessity === 'optional'
-                          ? 'bg-indigo-600 text-white shadow-xs'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      Необязательное
-                    </button>
-                  </div>
+                  )}
                 </div>
 
-                {/* 2. Регулярное / Разовое */}
-                <div>
-                  <label className="block text-[11px] font-medium text-slate-600 mb-1.5">
-                    Регулярность
-                  </label>
-                  <div className="grid grid-cols-2 gap-1 bg-white p-1 rounded-lg border border-slate-200 text-xs">
-                    <button
-                      type="button"
-                      onClick={() => setFrequency('regular')}
-                      className={`py-1.5 px-2 rounded-md font-medium text-center transition-all flex items-center justify-center gap-1 ${
-                        frequency === 'regular'
-                          ? 'bg-blue-600 text-white shadow-xs'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      <Repeat className="w-3 h-3" /> Регулярное
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFrequency('one_off')}
-                      className={`py-1.5 px-2 rounded-md font-medium text-center transition-all flex items-center justify-center gap-1 ${
-                        frequency === 'one_off'
-                          ? 'bg-slate-700 text-white shadow-xs'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      <Zap className="w-3 h-3" /> Разовое
-                    </button>
-                  </div>
-                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setBudgetDestination(budgetDestination === 'monthly' ? 'none' : 'monthly')}
+                    className={`p-2.5 rounded-xl font-medium text-left border transition-all flex flex-col gap-1 ${
+                      budgetDestination === 'monthly'
+                        ? 'bg-blue-50 text-blue-900 border-blue-400 ring-2 ring-blue-500/20 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-blue-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <Calendar className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Ежемесячный бюджет</span>
+                    </div>
+                    <span className="text-[10px] text-gray-500">В план каждого будущего месяца</span>
+                  </button>
 
-                {/* 3. Плановое / Внеплановое */}
-                <div>
-                  <label className="block text-[11px] font-medium text-slate-600 mb-1.5">
-                    Плановость
-                  </label>
-                  <div className="grid grid-cols-2 gap-1 bg-white p-1 rounded-lg border border-slate-200 text-xs">
-                    <button
-                      type="button"
-                      onClick={() => setPlanning('planned')}
-                      className={`py-1.5 px-2 rounded-md font-medium text-center transition-all flex items-center justify-center gap-1 ${
-                        planning === 'planned'
-                          ? 'bg-emerald-600 text-white shadow-xs'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      <Target className="w-3 h-3" /> Плановое
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPlanning('unplanned')}
-                      className={`py-1.5 px-2 rounded-md font-medium text-center transition-all flex items-center justify-center gap-1 ${
-                        planning === 'unplanned'
-                          ? 'bg-amber-600 text-white shadow-xs'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      <AlertCircle className="w-3 h-3" /> Внеплановое
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setBudgetDestination(budgetDestination === 'next_month' ? 'none' : 'next_month')}
+                    className={`p-2.5 rounded-xl font-medium text-left border transition-all flex flex-col gap-1 ${
+                      budgetDestination === 'next_month'
+                        ? 'bg-indigo-50 text-indigo-900 border-indigo-400 ring-2 ring-indigo-500/20 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-indigo-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <Clock className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Бюджет следующего месяца</span>
+                    </div>
+                    <span className="text-[10px] text-gray-500">В план на +1 месяц</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setBudgetDestination(budgetDestination === 'next_year' ? 'none' : 'next_year')}
+                    className={`p-2.5 rounded-xl font-medium text-left border transition-all flex flex-col gap-1 ${
+                      budgetDestination === 'next_year'
+                        ? 'bg-purple-50 text-purple-900 border-purple-400 ring-2 ring-purple-500/20 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-purple-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <CalendarRange className="w-3.5 h-3.5 text-purple-600" />
+                      <span>Бюджет месяца в след. году</span>
+                    </div>
+                    <span className="text-[10px] text-gray-500">В план на этот месяц +1 год</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setBudgetDestination(budgetDestination === 'reserve' ? 'none' : 'reserve')}
+                    className={`p-2.5 rounded-xl font-medium text-left border transition-all flex flex-col gap-1 ${
+                      budgetDestination === 'reserve'
+                        ? 'bg-amber-50 text-amber-900 border-amber-400 ring-2 ring-amber-500/20 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-amber-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <PiggyBank className="w-3.5 h-3.5 text-amber-600" />
+                      <span>Создать резерв</span>
+                    </div>
+                    <span className="text-[10px] text-gray-500">Сумма делится на 12 частей</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -465,7 +813,7 @@ export const ExpensesTab: React.FC = () => {
             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200/70 space-y-2">
               <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700 uppercase tracking-wider">
                 <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-600" />
-                Признак дохода
+                Регулярность дохода
               </div>
 
               <div className="max-w-xs">
@@ -549,7 +897,7 @@ export const ExpensesTab: React.FC = () => {
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-bold text-gray-900">История транзакций ({filteredTransactions.length})</h2>
-            <p className="text-xs text-gray-500">Все операции с классификацией по признакам</p>
+            <p className="text-xs text-gray-500">Все операции с распределением по категориям</p>
           </div>
 
           {/* Main Search & Filters */}
@@ -592,57 +940,47 @@ export const ExpensesTab: React.FC = () => {
               type="button"
               onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
               className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-colors flex items-center gap-1 ${
-                showAdvancedFilters || selectedNecessityFilter !== 'all' || selectedFrequencyFilter !== 'all' || selectedPlanningFilter !== 'all'
+                showAdvancedFilters || selectedRoleFilter !== 'all' || selectedDestinationFilter !== 'all'
                   ? 'bg-blue-50 text-blue-600 border-blue-200'
                   : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
               }`}
             >
               <SlidersHorizontal className="w-3.5 h-3.5" />
-              Фильтр признаков
+              Фильтры
             </button>
           </div>
         </div>
 
         {/* Secondary attribute filter row */}
         {showAdvancedFilters && (
-          <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs animate-fade-in">
+          <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs animate-fade-in">
             <div>
-              <label className="block text-[11px] font-semibold text-slate-600 mb-1">Обязательность:</label>
+              <label className="block text-[11px] font-semibold text-slate-600 mb-1">Категория расхода:</label>
               <select
-                value={selectedNecessityFilter}
-                onChange={e => setSelectedNecessityFilter(e.target.value)}
+                value={selectedRoleFilter}
+                onChange={e => setSelectedRoleFilter(e.target.value)}
                 className="w-full p-1.5 border border-slate-200 rounded-lg bg-white text-slate-800"
               >
-                <option value="all">Все (Обяз. + Необяз.)</option>
-                <option value="mandatory">Только обязательные</option>
-                <option value="optional">Только необязательные</option>
+                <option value="all">Все (Базовые + Рост + Утечки)</option>
+                <option value="basic">Базовые обязательства</option>
+                <option value="growth">Инвестиции в рост</option>
+                <option value="leak">Утечки (лишнее/спонтанное)</option>
               </select>
             </div>
 
             <div>
-              <label className="block text-[11px] font-semibold text-slate-600 mb-1">Регулярность:</label>
+              <label className="block text-[11px] font-semibold text-slate-600 mb-1">Планы будущих периодов:</label>
               <select
-                value={selectedFrequencyFilter}
-                onChange={e => setSelectedFrequencyFilter(e.target.value)}
+                value={selectedDestinationFilter}
+                onChange={e => setSelectedDestinationFilter(e.target.value)}
                 className="w-full p-1.5 border border-slate-200 rounded-lg bg-white text-slate-800"
               >
-                <option value="all">Все (Регулярные + Разовые)</option>
-                <option value="regular">Только регулярные</option>
-                <option value="one_off">Только разовые (расходы)</option>
-                <option value="irregular">Только нерегулярные (доходы)</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-600 mb-1">Плановость:</label>
-              <select
-                value={selectedPlanningFilter}
-                onChange={e => setSelectedPlanningFilter(e.target.value)}
-                className="w-full p-1.5 border border-slate-200 rounded-lg bg-white text-slate-800"
-              >
-                <option value="all">Все (Плановые + Внеплановые)</option>
-                <option value="planned">Только плановые</option>
-                <option value="unplanned">Только внеплановые</option>
+                <option value="all">Все записи</option>
+                <option value="none">Без добавления в планы</option>
+                <option value="monthly">В ежемесячный бюджет</option>
+                <option value="next_month">В бюджет след. месяца</option>
+                <option value="next_year">В бюджет месяца след. года</option>
+                <option value="reserve">Создан резерв (12 долей)</option>
               </select>
             </div>
 
@@ -670,9 +1008,8 @@ export const ExpensesTab: React.FC = () => {
           <div className="space-y-2">
             {filteredTransactions.map(item => {
               const isIncome = item.type === 'income';
-              const isMandatory = (item.necessity || 'mandatory') === 'mandatory';
-              const isRegular = item.frequency === 'regular' || item.incomeFrequency === 'regular';
-              const isPlanned = (item.planning || 'planned') === 'planned';
+              const role = item.expenseRole || 'basic';
+              const destination = item.budgetDestination || 'none';
 
               return (
                 <div
@@ -694,41 +1031,50 @@ export const ExpensesTab: React.FC = () => {
                           {item.method}
                         </span>
 
-                        {/* Attribute Badges */}
+                        {/* Категории расхода */}
                         {!isIncome ? (
                           <>
-                            {/* Necessity badge */}
-                            <span
-                              className={`text-[10px] px-2 py-0.5 rounded-md font-semibold border ${
-                                isMandatory
-                                  ? 'bg-blue-50 text-blue-700 border-blue-200/60'
-                                  : 'bg-indigo-50 text-indigo-700 border-indigo-200/60'
-                              }`}
-                            >
-                              {isMandatory ? 'Обязательное' : 'Необязательное'}
-                            </span>
+                            {role === 'basic' && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-md font-semibold border bg-blue-50 text-blue-700 border-blue-200 flex items-center gap-1">
+                                <ShieldCheck className="w-3 h-3 text-blue-600" />
+                                Базовые обязательства
+                              </span>
+                            )}
+                            {role === 'growth' && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-md font-semibold border bg-emerald-50 text-emerald-700 border-emerald-200 flex items-center gap-1">
+                                <Rocket className="w-3 h-3 text-emerald-600" />
+                                Инвестиции в рост
+                              </span>
+                            )}
+                            {role === 'leak' && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-md font-semibold border bg-rose-50 text-rose-700 border-rose-200 flex items-center gap-1">
+                                <Flame className="w-3 h-3 text-rose-600" />
+                                Утечки (лишнее/спонтанное)
+                              </span>
+                            )}
 
-                            {/* Frequency badge */}
-                            <span
-                              className={`text-[10px] px-2 py-0.5 rounded-md font-medium border ${
-                                item.frequency === 'regular'
-                                  ? 'bg-slate-100 text-slate-700 border-slate-200'
-                                  : 'bg-zinc-50 text-zinc-600 border-zinc-200'
-                              }`}
-                            >
-                              {item.frequency === 'regular' ? 'Регулярное' : 'Разовое'}
-                            </span>
-
-                            {/* Planning badge */}
-                            <span
-                              className={`text-[10px] px-2 py-0.5 rounded-md font-semibold border ${
-                                isPlanned
-                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200/60'
-                                  : 'bg-amber-50 text-amber-800 border-amber-200'
-                              }`}
-                            >
-                              {isPlanned ? 'Плановое' : 'Внеплановое'}
-                            </span>
+                            {/* Бюджетное назначение badge */}
+                            {destination === 'monthly' && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-md font-medium border bg-slate-100 text-slate-700 border-slate-200">
+                                В ежемесячный бюджет
+                              </span>
+                            )}
+                            {destination === 'next_month' && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-md font-medium border bg-indigo-50 text-indigo-700 border-indigo-200">
+                                В бюджет след. месяца
+                              </span>
+                            )}
+                            {destination === 'next_year' && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-md font-medium border bg-purple-50 text-purple-700 border-purple-200">
+                                В бюджет года (+1 год)
+                              </span>
+                            )}
+                            {destination === 'reserve' && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-md font-semibold border bg-amber-50 text-amber-800 border-amber-200 flex items-center gap-1">
+                                <PiggyBank className="w-3 h-3 text-amber-600" />
+                                Резерв (12 долей)
+                              </span>
+                            )}
                           </>
                         ) : (
                           <>

@@ -35,6 +35,7 @@ import {
   ComposedChart,
   Area
 } from 'recharts';
+import { Rocket, Flame, PiggyBank, CalendarRange, Clock } from 'lucide-react';
 
 const COLOR_PALETTE = [
   '#ef4444', '#3b82f6', '#10b981', '#8b5cf6', '#ec4899', 
@@ -111,44 +112,41 @@ export const ReportsTab: React.FC = () => {
   const expenseTxs = filteredTxs.filter(t => t.type === 'expense' || !t.type);
   const incomeTxs = filteredTxs.filter(t => t.type === 'income');
 
-  // Calculate totals
+  // Calculate totals for selected period
   const totalExpense = expenseTxs.reduce((sum, t) => sum + t.amount, 0);
   const totalIncome = incomeTxs.reduce((sum, t) => sum + t.amount, 0);
+  const netBalancePeriod = totalIncome - totalExpense;
 
-  // 1. Mandatory vs Optional Expenses
-  const mandatoryExpense = expenseTxs
-    .filter(t => (t.necessity || 'mandatory') === 'mandatory')
+  // 1. Категории расходов: Базовые обязательства / Инвестиции в рост / Утечки (лишнее/спонтанное)
+  const basicExpense = expenseTxs
+    .filter(t => (t.expenseRole || 'basic') === 'basic')
     .reduce((sum, t) => sum + t.amount, 0);
-  const optionalExpense = expenseTxs
-    .filter(t => t.necessity === 'optional')
+  const growthExpense = expenseTxs
+    .filter(t => t.expenseRole === 'growth')
     .reduce((sum, t) => sum + t.amount, 0);
-
-  const mandatoryPercent = totalExpense > 0 ? ((mandatoryExpense / totalExpense) * 100).toFixed(1) : '0';
-  const optionalPercent = totalExpense > 0 ? ((optionalExpense / totalExpense) * 100).toFixed(1) : '0';
-
-  // 2. Regular vs One-off Expenses
-  const regularExpense = expenseTxs
-    .filter(t => t.frequency === 'regular')
-    .reduce((sum, t) => sum + t.amount, 0);
-  const oneOffExpense = expenseTxs
-    .filter(t => (t.frequency || 'one_off') === 'one_off')
+  const leakExpense = expenseTxs
+    .filter(t => t.expenseRole === 'leak')
     .reduce((sum, t) => sum + t.amount, 0);
 
-  const regularExpensePercent = totalExpense > 0 ? ((regularExpense / totalExpense) * 100).toFixed(1) : '0';
-  const oneOffExpensePercent = totalExpense > 0 ? ((oneOffExpense / totalExpense) * 100).toFixed(1) : '0';
+  const basicPercent = totalExpense > 0 ? ((basicExpense / totalExpense) * 100).toFixed(1) : '0';
+  const growthPercent = totalExpense > 0 ? ((growthExpense / totalExpense) * 100).toFixed(1) : '0';
+  const leakPercent = totalExpense > 0 ? ((leakExpense / totalExpense) * 100).toFixed(1) : '0';
 
-  // 3. Planned vs Unplanned Expenses
-  const plannedExpense = expenseTxs
-    .filter(t => (t.planning || 'planned') === 'planned')
+  // 2. Добавление статьи расхода в планы будущих периодов
+  const monthlyDestExpense = expenseTxs
+    .filter(t => t.budgetDestination === 'monthly')
     .reduce((sum, t) => sum + t.amount, 0);
-  const unplannedExpense = expenseTxs
-    .filter(t => t.planning === 'unplanned')
+  const nextMonthDestExpense = expenseTxs
+    .filter(t => t.budgetDestination === 'next_month')
+    .reduce((sum, t) => sum + t.amount, 0);
+  const nextYearDestExpense = expenseTxs
+    .filter(t => t.budgetDestination === 'next_year')
+    .reduce((sum, t) => sum + t.amount, 0);
+  const reserveDestExpense = expenseTxs
+    .filter(t => t.budgetDestination === 'reserve')
     .reduce((sum, t) => sum + t.amount, 0);
 
-  const plannedPercent = totalExpense > 0 ? ((plannedExpense / totalExpense) * 100).toFixed(1) : '0';
-  const unplannedPercent = totalExpense > 0 ? ((unplannedExpense / totalExpense) * 100).toFixed(1) : '0';
-
-  // 4. Regular vs Irregular Incomes
+  // 3. Regular vs Irregular Incomes
   const regularIncome = incomeTxs
     .filter(t => (t.incomeFrequency || 'regular') === 'regular')
     .reduce((sum, t) => sum + t.amount, 0);
@@ -170,7 +168,41 @@ export const ReportsTab: React.FC = () => {
     value: categoryMap[catName]
   })).sort((a, b) => b.value - a.value);
 
-  // Group by Date/Month for Bar Chart
+  // -------------------------------------------------------------
+  // ДИНАМИКА БАЛАНСА, ДОХОДОВ И РАСХОДОВ ПО МЕСЯЦАМ (Пункт 4 ТЗ)
+  // -------------------------------------------------------------
+  const monthlyFinancialDynamics = useMemo(() => {
+    const allMonthsSet = new Set<string>();
+    expenses.forEach(t => {
+      if (t.date) allMonthsSet.add(t.date.substring(0, 7));
+    });
+
+    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    allMonthsSet.add(currentMonthKey);
+
+    const sortedMonths = Array.from(allMonthsSet).sort();
+
+    return sortedMonths.map(mKey => {
+      const monthTxs = expenses.filter(t => t.date && t.date.startsWith(mKey));
+      const inc = monthTxs.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
+      const exp = monthTxs.filter(t => t.type === 'expense' || !t.type).reduce((sum, t) => sum + t.amount, 0);
+      const bal = inc - exp;
+
+      const [y, m] = mKey.split('-');
+      const d = new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1);
+      const monthLabel = d.toLocaleDateString('ru-RU', { month: 'short', year: 'numeric' });
+
+      return {
+        monthKey: mKey,
+        monthLabel,
+        income: inc,
+        expense: exp,
+        balance: bal
+      };
+    });
+  }, [expenses, now]);
+
+  // Group by Date/Month for Bar Chart within selected period
   const monthMap: { [key: string]: { month: string; income: number; expense: number } } = {};
   filteredTxs.forEach(t => {
     const monthKey = t.date.substring(0, 7); // YYYY-MM
@@ -267,27 +299,29 @@ export const ReportsTab: React.FC = () => {
     };
   }, [expenses, dynamicsType, dynamicsCategory, now]);
 
-  // CSV Export logic with all attributes included
+  // CSV Export logic with all updated categories and plans included
   const exportCSV = () => {
-    let csv = "\uFEFFДата;Тип;Категория;Способ оплаты;Сумма;Обязательность;Регулярность;Плановость;Заметка\n";
+    let csv = "\uFEFFДата;Тип;Категория;Способ оплаты;Сумма;Категория расхода;План будущих периодов;Регулярность дохода;Заметка\n";
     filteredTxs.forEach(e => {
       const isInc = e.type === 'income';
       const typeLabel = isInc ? 'Доход' : 'Расход';
       
-      let necessityLabel = '';
-      let frequencyLabel = '';
-      let planningLabel = '';
+      let roleLabel = '';
+      let destLabel = '';
+      let incomeFreqLabel = '';
 
       if (!isInc) {
-        necessityLabel = (e.necessity || 'mandatory') === 'mandatory' ? 'Обязательное' : 'Необязательное';
-        frequencyLabel = (e.frequency || 'one_off') === 'regular' ? 'Регулярное' : 'Разовое';
-        planningLabel = (e.planning || 'planned') === 'planned' ? 'Плановое' : 'Внеплановое';
+        const role = e.expenseRole || 'basic';
+        roleLabel = role === 'basic' ? 'Базовые обязательства' : role === 'growth' ? 'Инвестиции в рост' : 'Утечки (лишнее/спонтанное)';
+        
+        const dest = e.budgetDestination || 'none';
+        destLabel = dest === 'monthly' ? 'Ежемесячный бюджет' : dest === 'next_month' ? 'Бюджет след. месяца' : dest === 'next_year' ? 'Бюджет след. года' : dest === 'reserve' ? 'Резерв (12 долей)' : 'Не добавлялся';
       } else {
-        frequencyLabel = (e.incomeFrequency || 'regular') === 'regular' ? 'Регулярный' : 'Нерегулярный';
+        incomeFreqLabel = (e.incomeFrequency || 'regular') === 'regular' ? 'Регулярный' : 'Нерегулярный';
       }
 
       const noteClean = e.note ? e.note.replace(/;/g, ',') : '';
-      csv += `${e.date};${typeLabel};${e.category};${e.method};${e.amount};${necessityLabel};${frequencyLabel};${planningLabel};${noteClean}\n`;
+      csv += `${e.date};${typeLabel};${e.category};${e.method};${e.amount};${roleLabel};${destLabel};${incomeFreqLabel};${noteClean}\n`;
     });
 
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -352,25 +386,100 @@ export const ReportsTab: React.FC = () => {
         </div>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between">
+      {/* 4. НОВЫЙ БЛОК: ПОКАЗАТЕЛИ БАЛАНСА, ДОХОДОВ И РАСХОДОВ В ДИНАМИКЕ ПО МЕСЯЦАМ */}
+      <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <p className="text-xs text-gray-500 uppercase font-medium">Расходы за период</p>
-            <p className="text-xl font-bold text-rose-600 mt-1">-{totalExpense.toLocaleString('ru-RU')} ₸</p>
+            <h2 className="text-base sm:text-lg font-bold text-gray-900 flex items-center gap-2">
+              <BarChart3 className="w-5 h-5 text-blue-600" />
+              Финансовые показатели в динамике по месяцам
+            </h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Сравнение доходов, расходов и чистого баланса помесячно с трендами и дельтой
+            </p>
           </div>
-          <div className="p-3 bg-rose-50 text-rose-600 rounded-xl">
-            <TrendingDown className="w-5 h-5" />
+
+          <div className="text-xs text-gray-500 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
+            Охват: <strong>{monthlyFinancialDynamics.length} мес.</strong>
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between">
-          <div>
-            <p className="text-xs text-gray-500 uppercase font-medium">Доходы за период</p>
-            <p className="text-xl font-bold text-emerald-600 mt-1">+{totalIncome.toLocaleString('ru-RU')} ₸</p>
-          </div>
-          <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
-            <TrendingUp className="w-5 h-5" />
+        {/* Dynamic Monthly Bar & Line Composed Chart */}
+        <div className="h-72 w-full pt-2">
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={monthlyFinancialDynamics}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+              <XAxis dataKey="monthLabel" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} tickFormatter={(val) => `${Math.round(val / 1000)}k`} />
+              <Tooltip
+                formatter={(val: number, name: string) => [`${val.toLocaleString('ru-RU')} ₸`, name]}
+                labelFormatter={(label) => `Месяц: ${label}`}
+              />
+              <Legend verticalAlign="top" height={34} wrapperStyle={{ fontSize: '12px' }} />
+              <Bar dataKey="income" name="Доходы" fill="#10b981" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="expense" name="Расходы" fill="#ef4444" radius={[4, 4, 0, 0]} />
+              <Line
+                type="monotone"
+                dataKey="balance"
+                name="Чистый баланс (Сальдо)"
+                stroke="#3b82f6"
+                strokeWidth={3}
+                dot={{ r: 4, fill: '#3b82f6' }}
+              />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Monthly Summary Cards Grid (помесячная раскладка) */}
+        <div className="pt-2">
+          <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider mb-2.5">
+            Показатели по каждому месяцу:
+          </h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {monthlyFinancialDynamics.map((m, idx) => {
+              const prev = idx > 0 ? monthlyFinancialDynamics[idx - 1] : null;
+              const balanceDiff = prev ? m.balance - prev.balance : 0;
+
+              return (
+                <div
+                  key={m.monthKey}
+                  className="p-3.5 bg-slate-50/70 hover:bg-slate-50 rounded-xl border border-slate-200/90 transition-all space-y-2"
+                >
+                  <div className="flex items-center justify-between border-b border-slate-200/60 pb-2">
+                    <span className="font-bold text-gray-900 text-sm capitalize">{m.monthLabel}</span>
+                    <span
+                      className={`text-xs font-extrabold px-2 py-0.5 rounded-lg border ${
+                        m.balance >= 0
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          : 'bg-rose-50 text-rose-700 border-rose-200'
+                      }`}
+                    >
+                      {m.balance >= 0 ? `+${m.balance.toLocaleString('ru-RU')}` : m.balance.toLocaleString('ru-RU')} ₸
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <p className="text-[11px] text-gray-500">Доходы</p>
+                      <p className="font-bold text-emerald-600 mt-0.5">+{m.income.toLocaleString('ru-RU')} ₸</p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] text-gray-500">Расходы</p>
+                      <p className="font-bold text-rose-600 mt-0.5">-{m.expense.toLocaleString('ru-RU')} ₸</p>
+                    </div>
+                  </div>
+
+                  {prev && (
+                    <div className="text-[10px] text-gray-500 pt-1 border-t border-slate-200/50 flex items-center justify-between">
+                      <span>Динамика к пред. мес.:</span>
+                      <span className={`font-semibold ${balanceDiff >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {balanceDiff >= 0 ? `+${balanceDiff.toLocaleString('ru-RU')}` : balanceDiff.toLocaleString('ru-RU')} ₸
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -556,134 +665,106 @@ export const ReportsTab: React.FC = () => {
         </div>
       </div>
 
-      {/* DETAILED ATTRIBUTES ANALYTICS SECTION */}
+      {/* DETAILED CATEGORIES & FUTURE PLANS ANALYTICS SECTION */}
       <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
             <SlidersHorizontal className="w-5 h-5 text-blue-600" />
-            Анализ по признакам и структуре бюджета
+            Структура расходов и планы будущих периодов
           </h3>
-          <span className="text-xs text-gray-400 font-medium hidden sm:inline">Глубокая аналитика трат</span>
+          <span className="text-xs text-gray-400 font-medium hidden sm:inline">За выбранный период отчета</span>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* 1. Обязательные vs Необязательные */}
-          <div className="p-4 rounded-xl border border-blue-100 bg-blue-50/40 space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* 1. Категории расходов: Базовые / Рост / Утечки */}
+          <div className="p-4 rounded-xl border border-blue-100 bg-blue-50/30 space-y-3">
             <div className="flex justify-between items-center">
               <span className="text-xs font-bold text-blue-900 flex items-center gap-1.5">
                 <ShieldCheck className="w-4 h-4 text-blue-600" />
-                Обязательность расходов
+                Категории расходов
               </span>
-              <span className="text-xs font-semibold text-blue-700">{mandatoryPercent}% обяз.</span>
+              <span className="text-xs font-semibold text-blue-700">{basicPercent}% базовые</span>
             </div>
 
-            {/* Progress Bar */}
-            <div className="h-2.5 w-full bg-blue-100 rounded-full overflow-hidden flex">
-              <div 
-                className="bg-blue-600 h-full transition-all duration-500" 
-                style={{ width: `${mandatoryPercent}%` }}
-                title={`Обязательные: ${mandatoryPercent}%`}
-              />
-              <div 
-                className="bg-indigo-400 h-full transition-all duration-500" 
-                style={{ width: `${optionalPercent}%` }}
-                title={`Необязательные: ${optionalPercent}%`}
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 text-xs pt-1">
-              <div className="bg-white p-2.5 rounded-lg border border-blue-100">
-                <p className="text-gray-500 text-[11px]">Обязательные</p>
-                <p className="font-bold text-blue-900 mt-0.5">{mandatoryExpense.toLocaleString('ru-RU')} ₸</p>
-                <p className="text-[10px] text-blue-600 mt-0.5">{mandatoryPercent}% от расходов</p>
-              </div>
-              <div className="bg-white p-2.5 rounded-lg border border-blue-100">
-                <p className="text-gray-500 text-[11px]">Необязательные</p>
-                <p className="font-bold text-indigo-900 mt-0.5">{optionalExpense.toLocaleString('ru-RU')} ₸</p>
-                <p className="text-[10px] text-indigo-600 mt-0.5">{optionalPercent}% от расходов</p>
-              </div>
-            </div>
-          </div>
-
-          {/* 2. Плановые vs Внеплановые */}
-          <div className="p-4 rounded-xl border border-emerald-100 bg-emerald-50/40 space-y-3">
-            <div className="flex justify-between items-center">
-              <span className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
-                <Target className="w-4 h-4 text-emerald-600" />
-                Плановость расходов
-              </span>
-              <span className="text-xs font-semibold text-emerald-700">{plannedPercent}% план</span>
-            </div>
-
-            {/* Progress Bar */}
-            <div className="h-2.5 w-full bg-emerald-100 rounded-full overflow-hidden flex">
-              <div 
-                className="bg-emerald-600 h-full transition-all duration-500" 
-                style={{ width: `${plannedPercent}%` }}
-              />
-              <div 
-                className="bg-amber-500 h-full transition-all duration-500" 
-                style={{ width: `${unplannedPercent}%` }}
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 text-xs pt-1">
-              <div className="bg-white p-2.5 rounded-lg border border-emerald-100">
-                <p className="text-gray-500 text-[11px]">Плановые</p>
-                <p className="font-bold text-emerald-900 mt-0.5">{plannedExpense.toLocaleString('ru-RU')} ₸</p>
-                <p className="text-[10px] text-emerald-600 mt-0.5">{plannedPercent}%</p>
-              </div>
-              <div className="bg-white p-2.5 rounded-lg border border-amber-200">
-                <p className="text-gray-500 text-[11px]">Внеплановые (спонтанные)</p>
-                <p className="font-bold text-amber-900 mt-0.5">{unplannedExpense.toLocaleString('ru-RU')} ₸</p>
-                <p className="text-[10px] text-amber-600 mt-0.5">{unplannedPercent}%</p>
-              </div>
-            </div>
-          </div>
-
-          {/* 3. Регулярные vs Разовые расходы */}
-          <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-3">
-            <div className="flex justify-between items-center">
-              <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                <Zap className="w-4 h-4 text-blue-600" />
-                Регулярность расходов
-              </span>
-              <span className="text-xs font-semibold text-slate-600">{regularExpensePercent}% регулярные</span>
-            </div>
-
+            {/* Tri-color progress bar */}
             <div className="h-2.5 w-full bg-slate-200 rounded-full overflow-hidden flex">
               <div 
                 className="bg-blue-600 h-full transition-all duration-500" 
-                style={{ width: `${regularExpensePercent}%` }}
+                style={{ width: `${basicPercent}%` }}
+                title={`Базовые: ${basicPercent}%`}
               />
               <div 
-                className="bg-slate-400 h-full transition-all duration-500" 
-                style={{ width: `${oneOffExpensePercent}%` }}
+                className="bg-emerald-500 h-full transition-all duration-500" 
+                style={{ width: `${growthPercent}%` }}
+                title={`Рост: ${growthPercent}%`}
+              />
+              <div 
+                className="bg-rose-500 h-full transition-all duration-500" 
+                style={{ width: `${leakPercent}%` }}
+                title={`Утечки: ${leakPercent}%`}
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-2 text-xs pt-1">
-              <div className="bg-white p-2.5 rounded-lg border border-slate-200">
-                <p className="text-gray-500 text-[11px]">Регулярные</p>
-                <p className="font-bold text-slate-900 mt-0.5">{regularExpense.toLocaleString('ru-RU')} ₸</p>
-                <p className="text-[10px] text-blue-600 mt-0.5">{regularExpensePercent}%</p>
+            <div className="space-y-1.5 text-xs pt-1">
+              <div className="bg-white p-2 rounded-lg border border-blue-100 flex items-center justify-between">
+                <span className="text-slate-600 flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-blue-600" /> Базовые обязательства
+                </span>
+                <span className="font-bold text-gray-900">{basicExpense.toLocaleString('ru-RU')} ₸ ({basicPercent}%)</span>
               </div>
-              <div className="bg-white p-2.5 rounded-lg border border-slate-200">
-                <p className="text-gray-500 text-[11px]">Разовые</p>
-                <p className="font-bold text-slate-900 mt-0.5">{oneOffExpense.toLocaleString('ru-RU')} ₸</p>
-                <p className="text-[10px] text-slate-500 mt-0.5">{oneOffExpensePercent}%</p>
+              <div className="bg-white p-2 rounded-lg border border-emerald-100 flex items-center justify-between">
+                <span className="text-slate-600 flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" /> Инвестиции в рост
+                </span>
+                <span className="font-bold text-emerald-800">{growthExpense.toLocaleString('ru-RU')} ₸ ({growthPercent}%)</span>
+              </div>
+              <div className="bg-white p-2 rounded-lg border border-rose-100 flex items-center justify-between">
+                <span className="text-slate-600 flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-rose-500" /> Утечки (лишнее/спонтанное)
+                </span>
+                <span className="font-bold text-rose-800">{leakExpense.toLocaleString('ru-RU')} ₸ ({leakPercent}%)</span>
               </div>
             </div>
           </div>
 
-          {/* 4. Регулярные vs Нерегулярные доходы */}
+          {/* 2. Добавление статей расхода в планы будущих периодов */}
+          <div className="p-4 rounded-xl border border-indigo-100 bg-indigo-50/30 space-y-3">
+            <div className="flex justify-between items-center">
+              <span className="text-xs font-bold text-indigo-900 flex items-center gap-1.5">
+                <PiggyBank className="w-4 h-4 text-indigo-600" />
+                Планы будущих периодов
+              </span>
+              <span className="text-xs font-semibold text-indigo-700">Статьи</span>
+            </div>
+
+            <div className="space-y-1.5 text-xs pt-1">
+              <div className="bg-white p-2 rounded-lg border border-slate-200 flex items-center justify-between">
+                <span className="text-slate-600">Ежемесячный бюджет:</span>
+                <span className="font-bold text-gray-900">{monthlyDestExpense.toLocaleString('ru-RU')} ₸</span>
+              </div>
+              <div className="bg-white p-2 rounded-lg border border-slate-200 flex items-center justify-between">
+                <span className="text-slate-600">Бюджет след. месяца:</span>
+                <span className="font-bold text-indigo-700">{nextMonthDestExpense.toLocaleString('ru-RU')} ₸</span>
+              </div>
+              <div className="bg-white p-2 rounded-lg border border-slate-200 flex items-center justify-between">
+                <span className="text-slate-600">Бюджет след. года:</span>
+                <span className="font-bold text-purple-700">{nextYearDestExpense.toLocaleString('ru-RU')} ₸</span>
+              </div>
+              <div className="bg-white p-2 rounded-lg border border-slate-200 flex items-center justify-between">
+                <span className="text-slate-600">Резервы (12 долей):</span>
+                <span className="font-bold text-amber-700">{reserveDestExpense.toLocaleString('ru-RU')} ₸</span>
+              </div>
+            </div>
+          </div>
+
+          {/* 3. Регулярность доходов */}
           <div className="p-4 rounded-xl border border-emerald-100 bg-emerald-50/30 space-y-3">
             <div className="flex justify-between items-center">
               <span className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
                 <Sparkles className="w-4 h-4 text-emerald-600" />
                 Регулярность доходов
               </span>
-              <span className="text-xs font-semibold text-emerald-700">{regularIncomePercent}% регулярный</span>
+              <span className="text-xs font-semibold text-emerald-700">{regularIncomePercent}% регулярные</span>
             </div>
 
             <div className="h-2.5 w-full bg-emerald-100 rounded-full overflow-hidden flex">
@@ -809,7 +890,7 @@ export const ReportsTab: React.FC = () => {
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 text-center space-y-3">
         <h3 className="font-bold text-gray-900">Выгрузка отчета</h3>
         <p className="text-xs text-gray-500 max-w-md mx-auto">
-          Скачайте выбранные транзакции со всеми признаками (обязательность, регулярность, плановость) в формате CSV для сохранения на диске или открытия в Excel и Google Таблицах.
+          Скачайте выбранные транзакции с категориями расходов, планами будущих периодов и регулярностью доходов в формате CSV для сохранения на диске или открытия в Excel и Google Таблицах.
         </p>
         <button
           onClick={exportCSV}

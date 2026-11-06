@@ -4,9 +4,8 @@ import type {
   Transaction, 
   Category, 
   PaymentMethod, 
-  ExpenseNecessity, 
-  ExpenseFrequency, 
-  ExpensePlanning, 
+  ExpenseRole, 
+  BudgetDestination, 
   IncomeFrequency 
 } from '../types';
 import { 
@@ -22,10 +21,17 @@ import {
   Zap, 
   CheckCircle2, 
   AlertCircle,
-  Pencil
+  Pencil,
+  ShieldCheck,
+  Rocket,
+  Flame,
+  PiggyBank,
+  CalendarRange,
+  Clock
 } from 'lucide-react';
 import { ReceiptUpload } from './ReceiptUpload';
 import { ReceiptViewerModal } from './ReceiptViewerModal';
+import { syncExpenseToBudget } from '../utils/budgetDestinationSync';
 
 interface EditTransactionModalProps {
   transaction: Transaction | null;
@@ -53,10 +59,9 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
   const [date, setDate] = useState<string>(transaction.date);
   const [note, setNote] = useState<string>(transaction.note || '');
 
-  // Expense attributes
-  const [necessity, setNecessity] = useState<ExpenseNecessity>(transaction.necessity || 'mandatory');
-  const [frequency, setFrequency] = useState<ExpenseFrequency>(transaction.frequency || 'one_off');
-  const [planning, setPlanning] = useState<ExpensePlanning>(transaction.planning || 'planned');
+  // Категория расхода: базовые / рост / утечки
+  const [expenseRole, setExpenseRole] = useState<ExpenseRole>(transaction.expenseRole || 'basic');
+  const [budgetDestination, setBudgetDestination] = useState<BudgetDestination>(transaction.budgetDestination || 'none');
 
   // Income attribute
   const [incomeFrequency, setIncomeFrequency] = useState<IncomeFrequency>(transaction.incomeFrequency || 'regular');
@@ -77,9 +82,8 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
       setMethod(transaction.method);
       setDate(transaction.date);
       setNote(transaction.note || '');
-      setNecessity(transaction.necessity || 'mandatory');
-      setFrequency(transaction.frequency || 'one_off');
-      setPlanning(transaction.planning || 'planned');
+      setExpenseRole(transaction.expenseRole || 'basic');
+      setBudgetDestination(transaction.budgetDestination || 'none');
       setIncomeFrequency(transaction.incomeFrequency || 'regular');
       setReceiptImage(transaction.receiptImage);
       setError(null);
@@ -133,20 +137,33 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
         receiptImage: receiptImage || undefined,
         ...(type === 'expense'
           ? {
-              necessity,
-              frequency,
-              planning,
+              expenseRole,
+              budgetDestination,
               incomeFrequency: undefined
             }
           : {
               incomeFrequency,
-              necessity: undefined,
-              frequency: undefined,
-              planning: undefined
+              expenseRole: undefined,
+              budgetDestination: undefined
             })
       };
 
       await db.expenses.update(transaction.id, updatedData);
+
+      // Если выбрано добавление в планы будущих периодов
+      if (type === 'expense' && budgetDestination && budgetDestination !== 'none' && budgetDestination !== transaction.budgetDestination) {
+        try {
+          await syncExpenseToBudget({
+            amount: numAmount,
+            category: category.trim(),
+            date,
+            destination: budgetDestination
+          });
+        } catch (syncErr) {
+          console.error('Ошибка синхронизации с бюджетом:', syncErr);
+        }
+      }
+
       onSaved();
       onClose();
     } catch (err: any) {
@@ -319,144 +336,169 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
             />
           </div>
 
-          {/* EXPENSE ATTRIBUTES */}
+          {/* EXPENSE CATEGORY & FUTURE BUDGET PLAN */}
           {type === 'expense' ? (
             <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl space-y-3">
-              <p className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-                Признаки расхода
-              </p>
+              {/* 1. Три категории расхода */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Категория расхода:
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setExpenseRole('basic')}
+                    className={`py-2 px-2.5 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5 border ${
+                      expenseRole === 'basic'
+                        ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-blue-300'
+                    }`}
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    Базовые обязательства
+                  </button>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                {/* 1. Обязательность */}
-                <div>
-                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                    Обязательность
+                  <button
+                    type="button"
+                    onClick={() => setExpenseRole('growth')}
+                    className={`py-2 px-2.5 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5 border ${
+                      expenseRole === 'growth'
+                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-emerald-300'
+                    }`}
+                  >
+                    <Rocket className="w-3.5 h-3.5" />
+                    Инвестиции в рост
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setExpenseRole('leak')}
+                    className={`py-2 px-2.5 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5 border ${
+                      expenseRole === 'leak'
+                        ? 'bg-rose-600 text-white border-rose-600 shadow-sm'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-rose-300'
+                    }`}
+                  >
+                    <Flame className="w-3.5 h-3.5" />
+                    Утечки (лишнее/спонтанное)
+                  </button>
+                </div>
+              </div>
+
+              {/* 2. Добавление статьи в планы будущих периодов */}
+              <div className="pt-2 border-t border-slate-200/60">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Добавить статью расхода в план будущих периодов:
                   </label>
-                  <div className="flex bg-white p-0.5 rounded-lg border border-slate-200">
+                  {budgetDestination !== 'none' && (
                     <button
                       type="button"
-                      onClick={() => setNecessity('mandatory')}
-                      className={`flex-1 py-1.5 text-[11px] font-semibold rounded-md transition-all flex items-center justify-center gap-1 ${
-                        necessity === 'mandatory'
-                          ? 'bg-blue-600 text-white shadow-xs'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
+                      onClick={() => setBudgetDestination('none')}
+                      className="text-[11px] text-gray-500 hover:text-rose-600 underline"
                     >
-                      <Target className="w-3 h-3" /> Обязат.
+                      Не добавлять в планы
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setNecessity('optional')}
-                      className={`flex-1 py-1.5 text-[11px] font-semibold rounded-md transition-all flex items-center justify-center gap-1 ${
-                        necessity === 'optional'
-                          ? 'bg-indigo-600 text-white shadow-xs'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      <Sparkles className="w-3 h-3" /> Необяз.
-                    </button>
-                  </div>
+                  )}
                 </div>
 
-                {/* 2. Регулярность */}
-                <div>
-                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                    Периодичность
-                  </label>
-                  <div className="flex bg-white p-0.5 rounded-lg border border-slate-200">
-                    <button
-                      type="button"
-                      onClick={() => setFrequency('regular')}
-                      className={`flex-1 py-1.5 text-[11px] font-semibold rounded-md transition-all flex items-center justify-center gap-1 ${
-                        frequency === 'regular'
-                          ? 'bg-slate-800 text-white shadow-xs'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      <Repeat className="w-3 h-3" /> Регуляр.
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFrequency('one_off')}
-                      className={`flex-1 py-1.5 text-[11px] font-semibold rounded-md transition-all flex items-center justify-center gap-1 ${
-                        frequency === 'one_off'
-                          ? 'bg-slate-800 text-white shadow-xs'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      <Zap className="w-3 h-3" /> Разовое
-                    </button>
-                  </div>
-                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setBudgetDestination(budgetDestination === 'monthly' ? 'none' : 'monthly')}
+                    className={`p-2.5 rounded-xl text-left border transition-all flex items-center gap-2 ${
+                      budgetDestination === 'monthly'
+                        ? 'bg-blue-50 text-blue-900 border-blue-400 font-bold ring-1 ring-blue-400'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-blue-200'
+                    }`}
+                  >
+                    <Calendar className="w-4 h-4 text-blue-600 flex-shrink-0" />
+                    <div>
+                      <div className="font-bold">Ежемесячный бюджет</div>
+                      <div className="text-[10px] text-gray-500 font-normal">В план каждого будущего месяца</div>
+                    </div>
+                  </button>
 
-                {/* 3. Плановость */}
-                <div>
-                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                    Плановость
-                  </label>
-                  <div className="flex bg-white p-0.5 rounded-lg border border-slate-200">
-                    <button
-                      type="button"
-                      onClick={() => setPlanning('planned')}
-                      className={`flex-1 py-1.5 text-[11px] font-semibold rounded-md transition-all flex items-center justify-center gap-1 ${
-                        planning === 'planned'
-                          ? 'bg-emerald-600 text-white shadow-xs'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      <CheckCircle2 className="w-3 h-3" /> План.
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPlanning('unplanned')}
-                      className={`flex-1 py-1.5 text-[11px] font-semibold rounded-md transition-all flex items-center justify-center gap-1 ${
-                        planning === 'unplanned'
-                          ? 'bg-amber-600 text-white shadow-xs'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      <AlertCircle className="w-3 h-3" /> Внеплан.
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setBudgetDestination(budgetDestination === 'next_month' ? 'none' : 'next_month')}
+                    className={`p-2.5 rounded-xl text-left border transition-all flex items-center gap-2 ${
+                      budgetDestination === 'next_month'
+                        ? 'bg-indigo-50 text-indigo-900 border-indigo-400 font-bold ring-1 ring-indigo-400'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-indigo-200'
+                    }`}
+                  >
+                    <Clock className="w-4 h-4 text-indigo-600 flex-shrink-0" />
+                    <div>
+                      <div className="font-bold">Бюджет след. месяца</div>
+                      <div className="text-[10px] text-gray-500 font-normal">В план на +1 месяц</div>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setBudgetDestination(budgetDestination === 'next_year' ? 'none' : 'next_year')}
+                    className={`p-2.5 rounded-xl text-left border transition-all flex items-center gap-2 ${
+                      budgetDestination === 'next_year'
+                        ? 'bg-purple-50 text-purple-900 border-purple-400 font-bold ring-1 ring-purple-400'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-purple-200'
+                    }`}
+                  >
+                    <CalendarRange className="w-4 h-4 text-purple-600 flex-shrink-0" />
+                    <div>
+                      <div className="font-bold">Бюджет месяца в след. году</div>
+                      <div className="text-[10px] text-gray-500 font-normal">В план на этот месяц +1 год</div>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setBudgetDestination(budgetDestination === 'reserve' ? 'none' : 'reserve')}
+                    className={`p-2.5 rounded-xl text-left border transition-all flex items-center gap-2 ${
+                      budgetDestination === 'reserve'
+                        ? 'bg-amber-50 text-amber-900 border-amber-400 font-bold ring-1 ring-amber-400'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-amber-200'
+                    }`}
+                  >
+                    <PiggyBank className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                    <div>
+                      <div className="font-bold">Создать резерв</div>
+                      <div className="text-[10px] text-gray-500 font-normal">Сумма делится на 12 частей</div>
+                    </div>
+                  </button>
                 </div>
               </div>
             </div>
           ) : (
-            /* INCOME ATTRIBUTES */
+            /* INCOME */
             <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl space-y-2">
-              <p className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-                Признаки дохода
-              </p>
-              <div>
-                <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                  Характер поступления
-                </label>
-                <div className="flex bg-white p-0.5 rounded-lg border border-slate-200">
-                  <button
-                    type="button"
-                    onClick={() => setIncomeFrequency('regular')}
-                    className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center justify-center gap-1.5 ${
-                      incomeFrequency === 'regular'
-                        ? 'bg-emerald-600 text-white shadow-xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    <Repeat className="w-3.5 h-3.5" /> Регулярный (оклад, аренда)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setIncomeFrequency('irregular')}
-                    className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center justify-center gap-1.5 ${
-                      incomeFrequency === 'irregular'
-                        ? 'bg-purple-600 text-white shadow-xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    <Sparkles className="w-3.5 h-3.5" /> Нерегулярный (премия, разовый)
-                  </button>
-                </div>
+              <label className="block text-xs font-semibold text-slate-700">
+                Регулярность дохода
+              </label>
+              <div className="flex bg-white p-1 rounded-xl border border-slate-200 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setIncomeFrequency('regular')}
+                  className={`flex-1 py-2 font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                    incomeFrequency === 'regular'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Repeat className="w-3.5 h-3.5" /> Регулярный (оклад, аренда)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIncomeFrequency('irregular')}
+                  className={`flex-1 py-2 font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                    incomeFrequency === 'irregular'
+                      ? 'bg-purple-600 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Zap className="w-3.5 h-3.5" /> Нерегулярный (бонус, премия)
+                </button>
               </div>
             </div>
           )}

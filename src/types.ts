@@ -1,8 +1,15 @@
 export type TransactionType = 'expense' | 'income';
 
-export type ExpenseNecessity = 'mandatory' | 'optional'; // Обязательное / Необязательное
-export type ExpenseFrequency = 'regular' | 'one_off'; // Регулярное / Разовое
-export type ExpensePlanning = 'planned' | 'unplanned'; // Плановое / Внеплановое
+// Категории расходов: Базовые обязательства / Инвестиции в рост / Утечки (лишнее/спонтанное)
+export type ExpenseRole = 'basic' | 'growth' | 'leak';
+
+// Функция добавления внесенной статьи расхода в планы будущих периодов
+export type BudgetDestination = 
+  | 'none'          // Не добавлять в планы будущих периодов
+  | 'monthly'       // Внести в ежемесячный бюджет (план на каждый месяц будущих периодов)
+  | 'next_month'     // Внести в бюджет следующего месяца (+1 месяц)
+  | 'next_year'      // Внести в бюджет месяца в следующем году (+1 год)
+  | 'reserve';       // Создать резерв (сумма расхода делится на 12 частей и вносится на 12 месяцев как "Резерв: <Категория>")
 
 export type IncomeFrequency = 'regular' | 'irregular'; // Регулярный / Нерегулярный
 
@@ -15,10 +22,10 @@ export interface Transaction {
   type: TransactionType;
   note?: string;
   createdAt?: string;
-  // Expense attributes
-  necessity?: ExpenseNecessity;
-  frequency?: ExpenseFrequency;
-  planning?: ExpensePlanning;
+  // Категория расхода: базовые / рост / утечки
+  expenseRole?: ExpenseRole;
+  // Добавление в планы будущих периодов
+  budgetDestination?: BudgetDestination;
   // Income attributes
   incomeFrequency?: IncomeFrequency;
   // Receipt / Photo attachment (base64 Data URL)

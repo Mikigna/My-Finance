@@ -172,18 +172,46 @@ export const BudgetTab: React.FC = () => {
     return transactions.filter(t => t.date >= periodStartDate && t.date <= periodEndDate);
   }, [transactions, periodStartDate, periodEndDate]);
 
-  // Filter categories by active budget type (expense/income) and deduplicate by name
+  // Filter categories by active budget type (expense/income) and include categories from budgetItems or transactions
   const currentCategories = useMemo(() => {
     const seen = new Set<string>();
-    return categories
+    const result: { id?: number; name: string; type: TransactionType; color?: string }[] = [];
+
+    // 1. Categories from database table
+    categories
       .filter(c => c.type === budgetType)
-      .filter(c => {
+      .forEach(c => {
         const name = (c.name || '').trim();
-        if (!name || seen.has(name)) return false;
-        seen.add(name);
-        return true;
+        if (name && !seen.has(name)) {
+          seen.add(name);
+          result.push({ id: c.id, name, type: c.type, color: c.color });
+        }
       });
-  }, [categories, budgetType]);
+
+    // 2. Categories that have planned budget items in this period (e.g., auto-created "Резерв: <Категория>")
+    budgetItems
+      .filter(b => b.type === budgetType)
+      .forEach(b => {
+        const name = (b.category || '').trim();
+        if (name && !seen.has(name)) {
+          seen.add(name);
+          result.push({ name, type: b.type, color: name.startsWith('Резерв:') ? '#f59e0b' : '#6366f1' });
+        }
+      });
+
+    // 3. Categories that have actual transactions in this period
+    periodTransactions
+      .filter(t => t.type === budgetType)
+      .forEach(t => {
+        const name = (t.category || '').trim();
+        if (name && !seen.has(name)) {
+          seen.add(name);
+          result.push({ name, type: t.type, color: '#64748b' });
+        }
+      });
+
+    return result;
+  }, [categories, budgetType, budgetItems, periodTransactions]);
 
   // Calculate Plan, Fact, Rollover, Reallocation, Saldo & % per Category
   const categoryBudgetStats = useMemo(() => {
